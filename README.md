@@ -1,5 +1,5 @@
 
-# Pytorch_learning
+# Pytorch_Research
 
 
 [![](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](https://github.com/bruce1408/Pytorch_learning)
