@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 # coding: utf-8
-
-
 # # 6 - Attention is All You Need
 #
 # 参考博客
