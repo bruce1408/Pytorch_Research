@@ -1,0 +1,105 @@
+data/
+*.bak
+*.xml
+*.iml
+*.bin
+*.json
+*.so
+*.o
+*.pth
+train
+bilstm_attn_model
+*.out
+my_add.egg-info/
+.vscode
+.DS_Store
+#.gitignore
+.idea/
+.DS_Store
+__pycache__
+venv/
+#*.onnx
+*.pt
+*.yaml
+*.onnx
+*.param
+compiler_output/
+*.bin
+*.npy
+build/
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: Debug Tests",
+            "type": "python",
+            "request": "test",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "C++: Launch",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${fileDirname}/${fileBasenameNoExtension}.out", //要调试的可执行文件
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "g++ build", // 指向 tasks.json 中定义的编译任务
+            "miDebuggerPath": "/usr/bin/gdb",
+            "logging": {
+                "engineLogging": true,
+                "trace": true,
+                "traceResponse": true
+            }
+        }
+    ]
+}
+#*.pth
+Pocket_Lab/resnet34/
+Pocket_Lab/resnet34*/
+Pocket_Lab/resnet*/
+*.cmake
+*.check_cache
+*.cmake
+*.egg-info
+# master 1
+*.egg
+*.log
+*.make
+Makefile*
+*.ts
+*.marks
+/Deploy/*
+/NLP/**/*.txt
+res.txt
+imagenet_jpg_class_256_crop_224.txt
+*.csv
+__pycache__
+# master 2
+*.txt
+*.bmp
+*.raw
+*.whl
+*.gz
+*.png
+inference_output/
+
+onnx_model_convert_onnxSimplify.py
