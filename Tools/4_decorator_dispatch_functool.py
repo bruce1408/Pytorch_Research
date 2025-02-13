@@ -4,18 +4,21 @@ import logging
 def dispatch_functool(func):
     registry = {}
 
+    # 根据参数value来返回注册的函数
     def dispatch(value):
         try:
             return registry[value]
         except KeyError:
             return func
 
+    # 用于将操作名称与对应函数注册到registry中
     def register(value, func=None):
         if func is None:
             return lambda f: register(value, f)
         registry[value] = func
         return func
 
+    # 负责调用dispatch并执行相应的函数
     def wrapper(*args, **kw):
         return dispatch(args[0])(*(args[1:]), **kw)
 
