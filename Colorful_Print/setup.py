@@ -14,7 +14,7 @@ setup(
     # package information
     
     name="printk",
-    version="0.3.2",
+    version="0.3.3",
     packages=find_packages(),
     description="A colorful print tool for python",
     author="bruce_cui",

@@ -1,5 +1,12 @@
-from termcolor import colored, cprint
+import logging
+import queue
+from termcolor import colored
 import unicodedata
+import datetime
+import sys
+import os
+import atexit
+from logging.handlers import QueueHandler, QueueListener
 
 def get_display_width(text):
     """
@@ -13,6 +20,127 @@ def get_display_width(text):
         else:
             width += 1
     return width
+
+class AsyncLoggerManager:
+    """异步日志管理器（单例模式）
+    
+    使用队列实现异步日志记录，避免日志记录影响主程序性能
+    """
+    
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        """实现单例模式"""
+        if not cls._instance:
+            cls._instance = super(AsyncLoggerManager, cls).__new__(cls)
+            cls._instance.init_logger(*args, **kwargs)
+        return cls._instance
+
+    def init_logger(self, name="QnnHelperLogger", work_dir=None, log_file=None, level=logging.INFO):
+        """初始化日志记录器
+        
+        Args:
+            name: 日志记录器名称
+            work_dir: 日志文件保存目录
+            log_file: 日志文件名称
+            level: 日志级别
+        """
+        
+        if not hasattr(self, "initialized"):
+            self.logger = logging.getLogger(name)
+            self.logger.setLevel(level)
+            
+            # 创建消息队列
+            self.log_queue = queue.Queue(-1)  # -1表示队列大小无限制
+
+            if log_file is None:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                log_file = f"qnnhelper_{timestamp}.log"
+                if work_dir is not None:
+                    log_file = os.path.join(work_dir, log_file)
+
+            # 定义日志格式
+            # fmt = '[%(asctime)s %(name)s] (%(filename)s %(lineno)d): %(levelname)s %(message)s'
+            fmt = '%(message)s'
+
+
+            # 创建文件处理器，将日志写入文件
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(level)
+            file_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S'))
+
+            # 创建控制台处理器，将日志输出到控制台，使用彩色格式
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setLevel(level)
+            console_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S'))
+
+            # 创建日志队列和队列处理器
+            queue_handler = QueueHandler(self.log_queue)
+            self.logger.addHandler(queue_handler)
+
+            # 创建队列监听器，监听日志队列并将日志发送到文件和控制台
+            self.listener = QueueListener(self.log_queue, file_handler, console_handler)
+            self.listener.start()
+            self.initialized = True
+
+            # 确保在程序退出时停止队列监听器
+            atexit.register(self.stop_listener)
+
+    def stop_listener(self):
+        """停止队列监听器"""
+        if self.listener:
+            self.listener.stop()
+            self.listener = None
+
+
+# 获取异步日志记录器实例
+logger_manager = AsyncLoggerManager()
+
+def print_colored_box(text, bbox_width=40, text_color='white', box_color='green', background_color='on_white', attrs=['bold'], text_background=False, align='left'):
+    if isinstance(text, list):
+        content_width = max(get_display_width(item) for item in text)
+    else:
+        content_width = get_display_width(text)
+
+    # 确定总宽度，考虑到边框的宽度(+2)
+    total_width = max(bbox_width, content_width + 4)
+
+    # 生成顶部和底部的边框
+    top_bottom_border = '+' + '-' * (total_width - 2) + '+'
+    logger_manager.logger.info(colored(top_bottom_border, box_color, attrs=attrs))
+
+    if isinstance(text, list):
+        for item in text:
+            space_padding = total_width - 2 - get_display_width(item) - 2  # 减去边框和文本两侧的空格
+            if align == 'left':
+                line = f" {item} " + " " * space_padding
+            elif align == 'right':
+                line = " " * space_padding + f" {item} "
+            elif align == 'center':
+                left_padding = space_padding // 2
+                right_padding = space_padding - left_padding
+                line = " " * left_padding + f" {item} " + " " * right_padding
+
+            logger_manager.logger.info(colored("|", box_color, attrs=attrs) + 
+                        colored(line, text_color, attrs=attrs, on_color=background_color if text_background else None) + 
+                        colored("|", box_color, attrs=attrs))
+    else:
+        space_padding = total_width - 2 - get_display_width(text) - 2
+        if align == 'left':
+            line = f" {text} " + " " * space_padding
+        elif align == 'right':
+            line = " " * space_padding + f" {text} "
+        elif align == 'center':
+            left_padding = space_padding // 2
+            right_padding = space_padding - left_padding
+            line = " " * left_padding + f" {text} " + " " * right_padding
+        logger_manager.logger.info(colored("|", box_color, attrs=attrs) + 
+                    colored(line, text_color, attrs=attrs, on_color=background_color if text_background else None) + 
+                    colored("|", box_color, attrs=attrs))
+
+    logger_manager.logger.info(colored(top_bottom_border, box_color, attrs=attrs))
+
+
 
 def print_colored_box_line(title, message, attrs=['bold'], text_color='white', box_color='yellow', box_width=80):
     # 使用 get_display_width 计算实际显示宽度
@@ -41,90 +169,10 @@ def print_colored_box_line(title, message, attrs=['bold'], text_color='white', b
     colored_message = colored(message_text, text_color, 'on_' + box_color, attrs=attrs)
     
     # 打印方框
-    print(colored_horizontal_border)
-    print(colored_title)
-    print(colored_horizontal_border)
-    print(colored_message)
-    print(colored_horizontal_border)
+    logger_manager.logger.info(colored_horizontal_border)
+    logger_manager.logger.info(colored_title)
+    logger_manager.logger.info(colored_horizontal_border)
+    logger_manager.logger.info(colored_message)
+    logger_manager.logger.info(colored_horizontal_border)
     
-
-
-def print_colored_box(text, bbox_width=40, text_color='white', box_color='green', background_color='on_white', attrs=['bold'], text_background=False, align='left'):
-    # 添加代码使用说明，以及一些示例
-    """
-    - text: 要打印的文本，可以是字符串或字符串列表。
-    - pad_len: 用户指定的输出宽度。
-    - pad_len: 用户指定的输出宽度。
-    - text_color: 文本颜色。
-    - box_color: 边框颜色。
-    - background_color: 文本背景颜色。
-    - attrs: 文本样式属性列表。
-    - text_background: 是否为文本添加背景颜色。
-    - align: 文本对齐方式，可以为'left'（默认）、'right'或'center'
-
-    print("使用说明：")
-    print("print_colored_box(text, text_background=False, text_color='white', box_color='green', background_color='on_white')")
-    print("text: 要打印的文本")
-    print("text_background: 是否为文本添加背景色，默认为False")
-    print("text_color: 文本颜色，默认为'white'")
-    print("box_color: 方框颜色，默认为'green'")
-    print("background_color: 文本背景色，默认为'on_white'")
-    print("\n")
-    print("示例：")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_white')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_red')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_yellow')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_blue')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_magenta')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_cyan')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_grey')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_black')")
-    print("print_colored_box('Hello, World!', text_background=True, text_color='white', box_color='green', background_color='on_white')")
-    print("\n")
-    打印彩色方框
-    """
     
-    if isinstance(text, list):
-        content_width = max(get_display_width(item) for item in text)
-    else:
-        content_width = get_display_width(text)
-
-    # 确定总宽度，考虑到边框的宽度(+2)
-    total_width = max(bbox_width, content_width + 4)
-
-    # 生成顶部和底部的边框
-    top_bottom_border = '+' + '-' * (total_width - 2) + '+'
-    print(colored(top_bottom_border, box_color, attrs=attrs))
-
-    if isinstance(text, list):
-        for item in text:
-            # 确保文本左侧有1个空格，右侧填充至总宽度减去边框宽度和左侧空格
-            # line = f" {item} ".ljust(total_width - 2)
-            space_padding = total_width - 2 - get_display_width(item) - 2  # 减去边框和文本两侧的空格
-            # line = f" {item} " + " " * space_padding
-            if align == 'left':
-                line = f" {item} " + " " * space_padding
-            elif align == 'right':
-                line = " " * space_padding + f" {item} "
-            elif align == 'center':
-                left_padding = space_padding // 2
-                right_padding = space_padding - left_padding
-                line = " " * left_padding + f" {item} " + " " * right_padding
-            
-            print(colored("|", box_color, attrs=attrs) + colored(line, text_color, attrs=attrs, on_color=background_color if text_background else None) + colored("|", box_color, attrs=attrs))
-    else:
-        # 对于单个文本，处理方式相同
-        # line = f" {text} ".ljust(total_width - 2)
-        space_padding = total_width - 2 - get_display_width(text) - 2
-        # line = f" {text} " + " " * space_padding
-        if align == 'left':
-            line = f" {text} " + " " * space_padding
-        elif align == 'right':
-            line = " " * space_padding + f" {text} "
-        elif align == 'center':
-            left_padding = space_padding // 2
-            right_padding = space_padding - left_padding
-            line = " " * left_padding + f" {text} " + " " * right_padding
-        print(colored("|", box_color, attrs=attrs) + colored(line, text_color, attrs=attrs, on_color=background_color if text_background else None) + colored("|", box_color, attrs=attrs))
-
-    print(colored(top_bottom_border, box_color, attrs=attrs))
