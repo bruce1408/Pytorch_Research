@@ -38,11 +38,11 @@ def buildEngine(
 def main():
     
     onnx_file = "./models/mobilev2_model.onnx"
-    engine_file = "./trt/mobilev2_model_int8.engine"
+    engine_file = "./trt/mobilev2_model_fp16.trt"
     calibration_cache = "./trt/mobilev2_model_calib.cache"
 
-    FP16_mode = False
-    INT8_mode = True
+    FP16_mode = True
+    INT8_mode = False
 
     dataloader = CalibDataLoader(batch_size=1, calib_count=1000)
 
