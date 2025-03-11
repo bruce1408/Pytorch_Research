@@ -10,7 +10,9 @@ class Registry:
         self._module_dict: Dict[str, Type] = {}
 
     def register_module(self, cls: Type) -> Type:
-        """通过装饰器将类注册到 _module_dict 中"""
+        """
+        通过装饰器将类注册到 _module_dict 中
+        """
         # 获取类的名字
         
         name: str = cls.__name__
@@ -35,6 +37,7 @@ class Registry:
         根据配置字典构建对象
         配置字典要求至少包含一个 'type' 字段，用于指定构建的类名，
         其他键值作为参数传递给类的构造函数。
+        build 函数实际就是在返回一个类的实例
         """
         # 从配置中弹出 'type' 字段
         obj_type: str = cfg.pop("type")
