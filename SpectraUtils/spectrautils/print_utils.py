@@ -39,7 +39,7 @@ class AsyncLoggerManager:
                 cls._instance.init_logger(*args, **kwargs)
         return cls._instance
 
-    def init_logger(self, name="QnnHelperLogger", work_dir=None, log_file=None, level=logging.INFO):
+    def init_logger(self, work_dir=None, log_file=None, level=logging.INFO):
         """初始化日志记录器
         
         Args:
@@ -50,16 +50,14 @@ class AsyncLoggerManager:
         """
         
         if not hasattr(self, "initialized"):
-            self.logger = logging.getLogger(name)
+            self.logger = logging.getLogger()
             self.logger.setLevel(level)
             
             # 创建消息队列
             self.log_queue = queue.Queue(-1)  # -1表示队列大小无限制
 
-
             # 定义日志格式
             fmt = '%(message)s'
-
 
             # 创建控制台处理器，将日志输出到控制台，使用彩色格式
             console_handler = logging.StreamHandler(sys.stdout)

@@ -3,10 +3,8 @@ import time
 import datetime
 import sys
 from spectrautils import logging_utils
-
 from enum import Enum
 
-# print(sys.path)
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -92,6 +90,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # if dist.get_rank() == 0:
     #     print(0)
 
+    
     train_dataset = datasets.FakeData(50000, (3, 32, 32), 10, transforms.ToTensor())
     # val_dataset = datasets.FakeData(500, (3, 32, 32), 10, transforms.ToTensor())
     # dataset_train = CIFAR10(root='/home/cuidongdong', train=True, download=False, transform=transforms_train)

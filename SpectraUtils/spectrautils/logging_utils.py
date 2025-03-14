@@ -43,7 +43,7 @@ class AsyncLoggerManager:
     def init_logger(self, work_dir=None, log_file=None, level=logging.INFO):
         """初始化日志记录器"""
         if not hasattr(self, "initialized"):
-            self.logger = logging.getLogger(self.__class__.__name__)
+            self.logger = logging.getLogger()
             
             # 清除已有的处理器，避免重复添加
             self.logger.handlers.clear()
