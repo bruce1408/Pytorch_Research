@@ -2,9 +2,9 @@ import os
 import time
 import datetime
 import sys
+from spectrautils import logging_utils
+
 from enum import Enum
-sys.path.append("../..")
-from utils.logger import Logger
 
 # print(sys.path)
 import torch
@@ -20,6 +20,9 @@ import torchvision.transforms as transforms
 
 import torch.multiprocessing as mp
 import torch.utils.data.distributed
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(current_dir)
 
 from model import pyramidnet
 import argparse
@@ -42,7 +45,9 @@ args = parser.parse_args()
 
 gpu_devices = ','.join([str(id) for id in args.gpu_devices])
 os.environ["CUDA_VISIBLE_DEVICES"] = gpu_devices
-log = Logger("test.log", level='info')
+
+logger_manager = logging_utils.AsyncLoggerManager(work_dir='./logs')
+logger = logger_manager.logger
 
 
 def main():
@@ -91,9 +96,12 @@ def main_worker(gpu, ngpus_per_node, args):
     # val_dataset = datasets.FakeData(500, (3, 32, 32), 10, transforms.ToTensor())
     # dataset_train = CIFAR10(root='/home/cuidongdong', train=True, download=False, transform=transforms_train)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-                              num_workers=args.num_workers,
-                              sampler=train_sampler)
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=args.batch_size, 
+        shuffle=(train_sampler is None),
+        num_workers=args.num_workers,
+        sampler=train_sampler)
 
     # there are 10 classes so the dataset name is cifar-10
     classes = ('plane', 'car', 'bird', 'cat', 'deer',
@@ -202,7 +210,7 @@ class ProgressMeter(object):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
         # print('\t'.join(entries))
-        log.logger.info('\t'.join(entries))
+        logger.info(' '.join(entries))
 
     def display_summary(self):
         entries = [" *"]
@@ -216,15 +224,15 @@ class ProgressMeter(object):
 
 
 def train(net, criterion, optimizer, train_loader, device, epoch):
-    batch_time = AverageMeter('Time', ':6.3f')
-    data_time = AverageMeter('Data', ':6.3f')
+    batch_time = AverageMeter('Time', ':2.3f')
+    data_time = AverageMeter('Data', ':2.3f')
     losses = AverageMeter('Loss', ':.6f')
-    top1 = AverageMeter('Acc@1', ':6.2f')
+    top1 = AverageMeter('Acc@1', ':4.2f')
     # top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
         [batch_time, data_time, losses, top1],
-        prefix="Epoch: [{}]".format(epoch))
+        prefix="Epoch:[{}]".format(epoch))
 
     net.train()
     train_loss = 0

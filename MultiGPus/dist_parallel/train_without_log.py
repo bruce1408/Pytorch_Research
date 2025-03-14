@@ -20,11 +20,10 @@ import torch.utils.data.distributed
 from model import pyramidnet
 import argparse
 # from tensorboardX import SummaryWriter
-from CV.utils.logger import Logger
 parser = argparse.ArgumentParser(description='cifar10 classification models')
 parser.add_argument('--lr', default=0.1, help='')
 parser.add_argument('--resume', default=None, help='断点训练')
-parser.add_argument('--batch_size', type=int, default=32, help='')
+parser.add_argument('--batch_size', type=int, default=64, help='')
 parser.add_argument('--num_workers', type=int, default=4, help='')
 parser.add_argument("--gpu_devices", type=int, nargs='+', default=[0, 1], help="gpu设备编号")
 
@@ -40,6 +39,9 @@ args = parser.parse_args()
 gpu_devices = ','.join([str(id) for id in args.gpu_devices])
 os.environ["CUDA_VISIBLE_DEVICES"] = gpu_devices
 
+# 添加进入代码目录的功能
+current_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(current_dir)
 
 def main():
     args = parser.parse_args()
@@ -80,7 +82,12 @@ def main_worker(gpu, ngpus_per_node, args):
     # dataset_train = []
     # if dist.get_rank() == 0:
     #     print(0)
-    dataset_train = CIFAR10(root='/home/cuidongdong', train=True, download=False, transform=transforms_train)
+    dataset_train = CIFAR10(
+        root='./', 
+        train=True, 
+        download=True, 
+        transform=transforms_train)
+    
     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset_train)
     train_loader = DataLoader(dataset_train, batch_size=args.batch_size, shuffle=(train_sampler is None),
                               num_workers=args.num_workers,
@@ -101,7 +108,7 @@ def main_worker(gpu, ngpus_per_node, args):
         net.load_state_dict(state_dict)
         optimizer.load_state_dict(checkpoints["optimizer"])
     train(net, criterion, optimizer, train_loader, args.gpu)
-
+    
 
 def train(net, criterion, optimizer, train_loader, device):
     net.train()
