@@ -29,7 +29,8 @@ args = parser.parse_args()
 # gpu_devices = ','.join([str(id) for id in args.gpu_devices])
 # os.environ["CUDA_VISIBLE_DEVICES"] = gpu_devices
 os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
-
+current_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(current_dir)
 
 def main():
     best_acc = 0
@@ -43,7 +44,7 @@ def main():
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
 
-    dataset_train = CIFAR10(root='/home/cuidongdong/data', train=True, download=False,
+    dataset_train = CIFAR10(root='../dist_parallel', train=True, download=False,
                             transform=transforms_train)
 
     train_loader = DataLoader(dataset_train, batch_size=args.batch_size, 
