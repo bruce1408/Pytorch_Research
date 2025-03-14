@@ -56,19 +56,10 @@ class AsyncLoggerManager:
             # 创建消息队列
             self.log_queue = queue.Queue(-1)  # -1表示队列大小无限制
 
-            if log_file is None:
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                log_file = f"qnnhelper_{timestamp}.log"
-                if work_dir is not None:
-                    log_file = os.path.join(work_dir, log_file)
 
             # 定义日志格式
             fmt = '%(message)s'
 
-            # 创建文件处理器，将日志写入文件
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setLevel(level)
-            file_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S'))
 
             # 创建控制台处理器，将日志输出到控制台，使用彩色格式
             console_handler = logging.StreamHandler(sys.stdout)
@@ -80,7 +71,7 @@ class AsyncLoggerManager:
             self.logger.addHandler(queue_handler)
 
             # 创建队列监听器，监听日志队列并将日志发送到文件和控制台
-            self.listener = QueueListener(self.log_queue, file_handler, console_handler)
+            self.listener = QueueListener(self.log_queue, console_handler)
             self.listener.start()
             self.initialized = True
 
