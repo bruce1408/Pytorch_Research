@@ -1,0 +1,1 @@
+dogs_cats_dataset_path = '/mnt/share_disk/bruce_trie/misc_data_products/dogs_cats'

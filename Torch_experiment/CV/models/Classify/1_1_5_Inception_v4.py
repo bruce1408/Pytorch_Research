@@ -7,14 +7,18 @@ import torch.nn as nn
 from utils.dog_cat import DogCat
 from torchvision.datasets import FakeData
 from torchvision import transforms
+import utils.config as config
 # from CV.utils.dog_cat import DogCat
-from CV.models.Classify import Inception_v1
+# from models.Classify import Inception_v1
+from Inception_v1 import Inception_v1
+from spectrautils import logging_utils
+
 seed = 0
 torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
 # parameters
-os.environ['CUDA_VISIBLES_DEVICES'] = '1,2'
+os.environ['CUDA_VISIBLES_DEVICES'] = '1, 2'
 batchsize = 64
 num_works = 4
 epochs = 30
@@ -30,8 +34,8 @@ if args.dummy:
     trainData = FakeData(10000, (3, 224, 224), 2, transforms.ToTensor())
     valData = FakeData(2000, (3, 224, 224), 2, transforms.ToTensor())
 else:
-    trainData = DogCat('../../Dataset/dogs_cats/train')
-    valData = DogCat("../../Dataset/dogs_cats/train", train=False, test=True)
+    trainData = DogCat(f'{config.dogs_cats_dataset_path}/train')
+    valData = DogCat(f"{config.dogs_cats_dataset_path}/train", train=False, test=True)
 
 trainloader = torch.utils.data.DataLoader(trainData, batch_size=batchsize, shuffle=True, num_workers=num_works)
 valloader = torch.utils.data.DataLoader(valData, batch_size=batchsize, shuffle=False, num_workers=num_works)

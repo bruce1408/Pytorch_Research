@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 from torchvision.models import vgg16
-
-
 from torchvision.models.resnet import resnet18
 import os
 import torch
@@ -11,14 +9,40 @@ import random
 from PIL import Image
 import torch.utils.data as data
 import torchvision.transforms as transforms
+import utils.config as config
+import argparse
+from spectrautils import logging_utils, print_utils
+
+
 """
 冻结预训练部分卷积层(靠近输入的多数卷积层),然后训练剩下的卷积层(靠近输出的部分)和全连接层,只更新最后三层的全连接层
 https://cloud.tencent.com/developer/article/1435646
 """
+
+logger_manager = logging_utils.AsyncLoggerManager(work_dir="./logs")
+logger = logger_manager.logger
+
+
+def get_config():
+    parser = argparse.ArgumentParser(description='dog-vs-cat classification models')
+    parser.add_argument('--lr', default=0.1, help='')
+    parser.add_argument('--resume', default=None, help='')
+    parser.add_argument('--data_path', default=f"{config.dogs_cats_dataset_path}", help='')
+    parser.add_argument('--batch_size', type=int, default=64, help='')
+    parser.add_argument("--log_interval", type=int, default=50, help="")
+    parser.add_argument('--epochs', type=int, default=24, help='')
+    parser.add_argument('--num_worker', type=int, default=4, help='')
+    parser.add_argument("--gpu_devices", type=int, nargs='+', default=[0, 1], help="")
+    args = parser.parse_args()
+    return args
+
+
+args = get_config()
 # parameters
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-batchsize = 32
-num_workers = 4
+gpu_devices = ','.join([str(id) for id in args.gpu_devices])
+os.environ['CUDA_VISIBLE_DEVICES'] = gpu_devices
+
+
 
 
 class CustomData(data.Dataset):
@@ -72,12 +96,12 @@ transform_val = transforms.Compose([
 ])
 
 # 生成训练集和验证集
-trainset = CustomData('../../Dataset/dogs_cats/train', transform=transform_train)
-valset = CustomData('../../Dataset/dogs_cats/train', transform=transform_val, train=False, val=True)
+trainset = CustomData(f'{args.data_path}/train', transform=transform_train)
+valset = CustomData(f'{args.data_path}/train', transform=transform_val, train=False, val=True)
 # 将训练集和验证集放到 DataLoader 中去，shuffle 进行打乱顺序（在多个 epoch 的情况下）
 # num_workers 加载数据用多少的子线程（windows不能用这个参数）
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=batchsize, shuffle=True, num_workers=num_workers)
-valloader = torch.utils.data.DataLoader(valset, batch_size=batchsize, shuffle=False, num_workers=num_workers)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_worker)
+valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_worker)
 
 
 class Net(nn.Module):
@@ -129,7 +153,9 @@ def train(epoch):
         loss.backward()
         optimizer.step()
         train_acc = get_acc(out, label)
-        print("Epoch:%d [%d|%d] loss:%f acc:%f" % (epoch, batch_idx, len(trainloader), loss.mean(), train_acc))
+        if batch_idx % args.log_interval == 0:
+            logger.info("Train Epoch:[%d|%d] [%d|%d] loss:%f acc:%f" % (epoch, args.epochs, batch_idx, len(trainloader), loss.mean(), train_acc))
+        # logger.info("Train Epoch:[%d|%d] [%d|%d] loss:%f acc:%f" % (epoch, args.epochs, batch_idx, len(trainloader), loss.mean(), train_acc))
 
 
 def val(epoch):
@@ -148,13 +174,15 @@ def val(epoch):
 
             total += image.size(0)
             correct += predicted.data.eq(label.data).cpu().sum()
-            print("Epoch:%d [%d|%d] total:%d correct:%d" % (epoch, batch_idx, len(valloader), total, correct.numpy()))
-    print("Acc: %f " % ((1.0 * correct.numpy()) / total))
+            if batch_idx % args.log_interval == 0:
+                logger.info("Val Epoch:[%d|%d] [%d|%d] total:%d correct:%d" % (epoch, args.epochs, batch_idx, len(valloader), total, correct.numpy()))
+    logger.info("Acc: %f " % ((1.0 * correct.numpy()) / total))
 
 
 if __name__ == '__main__':
     vgg = vgg16(pretrained=True)
-    print(vgg)
+    
+    # print(vgg)
     for param in vgg.parameters():
         param.requires_grad = False
 
@@ -163,9 +191,13 @@ if __name__ == '__main__':
     model = model.to(device)  # 放到 GPU 上跑
     optimizer = torch.optim.SGD(model.layers.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)  # 设置训练细节
     criterion = nn.CrossEntropyLoss()  # 分类问题用交叉熵普遍
-    for epoch in range(20):
+    for epoch in range(args.epochs):
+        # 训练
         train(epoch)
+        
+        # 验证
         val(epoch)
-    torch.save(model, 'modelcatdog.pt')  # 保存模型
+    
+    torch.save(model, 'model_catdog.pt')  # 保存模型
 
 
