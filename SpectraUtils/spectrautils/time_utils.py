@@ -1,5 +1,5 @@
 import time
-from print_utils import print_colored_box
+from .print_utils import print_colored_box
 
 def time_it(func):
     def wrapper(*argc, **kwargs):
@@ -11,13 +11,3 @@ def time_it(func):
         return result
     return wrapper
 
-
-if __name__ == "__main__":
-    @time_it
-    def example_function():
-        # 模拟一个耗时的操作
-        time.sleep(2)
-        print("Example function executed")
-        
-    # 调用示例函数
-    example_function()
