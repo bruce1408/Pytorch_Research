@@ -57,6 +57,8 @@ def main():
     print('==> Making model..')
 
     net = pyramidnet()
+    
+    # 模型包装在 DataParallel 中，允许多个gpu并行处理数据
     net = nn.DataParallel(net)
     net = net.to(device)
     num_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
