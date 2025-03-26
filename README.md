@@ -40,11 +40,17 @@ dataset, state-of-the art in NLP.
 
 ## Table of Contents
 
-- [Project](#Project)
-- [Install](#install)
-- [Usage](#usage)
-- [Related Efforts](#Related-Efforts)
-- [Contributors](#Contributors)
+- [Pytorch\_Research](#pytorch_research)
+    - [代码测试环境](#代码测试环境)
+  - [Table of Contents](#table-of-contents)
+  - [Project](#project)
+      - [Computer Vision](#computer-vision)
+      - [Natural language processing](#natural-language-processing)
+  - [Install](#install)
+  - [Usage](#usage)
+  - [Global Configuration](#global-configuration)
+  - [Related Efforts](#related-efforts)
+    - [Contributors](#contributors)
 
 ## Project
 
@@ -87,6 +93,10 @@ $ pip install -r requirements.txt
 
 All data for this project can be found in [Baidu Cloud Disk](https://pan.baidu.com/s/1TCOPe6PRd6S-SR16yOlZfg) 密码: 39nw
 
+
+## Global Configuration
+这个项目用到的全局的配置都在根目录下的utils里面的config.py文件，每次运行的时候需要把 
+
 ## Related Efforts
 
 - [Sung Kim](https://github.com/hunkim)
@@ -100,3 +110,4 @@ All data for this project can be found in [Baidu Cloud Disk](https://pan.baidu.c
 
 This project exists thanks to all the people who contribute. 
 Everyone is welcome to submit code contributions
+

@@ -1,4 +1,5 @@
 import time, os
+from config import *
 import numpy as np
 from collections import OrderedDict
 import onnxruntime as ort
@@ -10,7 +11,7 @@ from bokeh.layouts import column
 import holoviews as hv
 import pandas as pd
 import hvplot.pandas  # pylint:disable=unused-import
-
+import common.config as config
 from bokeh.layouts import row
 from bokeh.plotting import figure
 from bokeh.layouts import column
@@ -19,6 +20,7 @@ from bokeh.models import HoverTool, WheelZoomTool, ColumnDataSource
 from bokeh.models import HoverTool, ColumnDataSource, Span, TableColumn, DataTable
 from spectrautils import logging_utils, print_utils
 
+os.environ["CUDA_VISIBLE_DEVICES"]="2"
 
 class PlotsLayout:
     """
@@ -111,30 +113,52 @@ def histogram(data_frame, column_name, num_bins, x_label=None, y_label=None, tit
     return bokeh_plot
 
 
-def get_weights(conv_module):
+# def get_torch_weights(conv_module):
+#     """
+#     Returns the weights of a conv_module in a 2d matrix, where each column is an output channel.
+
+#     :param conv_module: convNd module
+#     :return: 2d numpy array
+#     """
+#     output_channel_nums = conv_module.weight.shape[0]
+    
+#     # input_channel * kernel_h * kernel_w
+#     axis_1_length = np.prod(conv_module.weight.shape[1:])
+    
+#     reshaped = conv_module.weight.reshape(int(output_channel_nums), int(axis_1_length))
+    
+#     # 转置
+#     weights = reshaped.detach().numpy().T
+#     return weights
+
+
+def get_onnx_weights(node):
+    pass
+
+
+def get_torch_weights(module):
     """
-    Returns the weights of a conv_module in a 2d matrix, where each column is an output channel.
+    Args:
+        module (torch.nn.Module): PyTorch模块
+        通常是nn.Conv2d或nn.Linear等带有权重的层。
 
-    :param conv_module: convNd module
-    :return: 2d numpy array
+    Returns:
+        numpy.ndarray: 形状为(num_input_features, num_output_channels)的二维numpy数组。
+                       每列代表一个输出通道的权重向量。
     """
-    output_channel_nums = conv_module.weight.shape[0]
+    weights = module.weight.data
     
-    # input_channel * kernel_h * kernel_w
-    axis_1_length = np.prod(conv_module.weight.shape[1:])
-    
-    reshaped = conv_module.weight.reshape(int(output_channel_nums), int(axis_1_length))
-    
-    # 转置
-    weights = reshaped.detach().numpy().T
-    return weights
+    # 这样就是把权重参数 变成 [output_channel, input_channel * kernel_h * kernel_w]
+    reshaped = weights.view(weights.shape[0], -1)
+    # 将张量移动到 CPU 并转换为 numpy 数组
+    return reshaped.detach().cpu().numpy().T
 
 
-def style(p):
+def style(p:figure) -> figure:
     """
     Style bokeh figure object p and return the styled object
     :param p: Bokeh figure object
-    :return: Bokeh figure object
+    :return: St Styled Bokeh figure
     """
     # Title
     p.title.align = 'center'
@@ -155,35 +179,6 @@ def style(p):
     p.add_tools(WheelZoomTool())
 
     return p
-
-
-def get_onnx_model_io_info(onnx_path):
-    """
-    获取ONNX模型的输入输出信息
-    
-    Args:
-        onnx_path: ONNX模型文件的路径
-        
-    Returns:
-        tuple: 包含两个字典的元组 (input_info, output_info)
-    """
-    
-    # 创建ONNX运行时的推理会话
-    session = ort.InferenceSession(onnx_path)
-    
-    input_info = OrderedDict((input_node.name, {
-        'shape': input_node.shape,
-        'type': input_node.type
-    }) for input_node in session.get_inputs())
-    
-    output_info = OrderedDict((output_node.name, {
-        'shape': output_node.shape,
-        'type': output_node.type
-    }) for output_node in session.get_outputs())
-    
-    
-    # 返回输入和输出信息
-    return input_info, output_info
 
 
 def add_vertical_line_to_figure(x_coordinate, figure_object):
@@ -328,14 +323,17 @@ def visualize_changes_after_optimization_single_layer(name, old_model_module, ne
 
     device_old_module = get_device(old_model_module)
     device_new_module = get_device(new_model_module)
-
-    old_model_module.cpu()
-    new_model_module.cpu()
-
+    
     layout = PlotsLayout()
+    
+    with torch.no_grad():
+        old_model_module.cpu()
+        new_model_module.cpu()
+
+    
     layout.title = name
-    layer_weights_summary_statistics_old = pd.DataFrame(get_weights(old_model_module)).describe().T
-    layer_weights_summary_statistics_new = pd.DataFrame(get_weights(new_model_module)).describe().T
+    layer_weights_summary_statistics_old = pd.DataFrame(get_torch_weights(old_model_module)).describe().T
+    layer_weights_summary_statistics_new = pd.DataFrame(get_torch_weights(new_model_module)).describe().T
 
     summary_stats_line_plot = line_plot_changes_in_summary_stats(layer_weights_summary_statistics_old,
                                                                  layer_weights_summary_statistics_new,
@@ -371,7 +369,7 @@ def visualize_changes_after_optimization_single_layer(name, old_model_module, ne
     return layout.complete_layout()
 
 
-def detect_outlier_channels(data_frame_with_relative_ranges, column="relative range", factor=1.5):
+def detect_outlier_channels(data_frame, column="relative range", factor=1.5):
     """
     检测相对权重范围的异常值。
     
@@ -381,52 +379,22 @@ def detect_outlier_channels(data_frame_with_relative_ranges, column="relative ra
     Returns:
         list: 具有非常大的权重范围的输出通道列表
     """
-    # 计算第一四分位数（Q1）
-    Q1 = data_frame_with_relative_ranges.quantile(0.25)
-    
-    # 计算第三四分位数（Q3）
-    Q3 = data_frame_with_relative_ranges.quantile(0.75)
-    
-    # 计算四分位距（IQR）
+    # 计算四分位数和四分位距
+    Q1 = data_frame.quantile(0.25)
+    Q3 = data_frame.quantile(0.75)
     IQR = Q3 - Q1
     
-    # 定义上侧异常值的阈值：大于 Q3 + 1.5 * IQR
-    upper_bound = Q3 + 1.5 * IQR
+    # 计算上下界
+    lower_bound = Q1 - factor * IQR
+    upper_bound = Q3 + factor * IQR
     
-    # 定义下侧异常值的阈值：小于 Q1 - 1.5 * IQR
-    lower_bound = Q1 - 1.5 * IQR
+    # 检测异常值
+    outliers = {
+        'upper': data_frame[data_frame > upper_bound].index.tolist(),
+        'lower': data_frame[data_frame < lower_bound].index.tolist()
+    }
     
-    # 检测上侧异常值
-    upper_outliers = data_frame_with_relative_ranges[data_frame_with_relative_ranges['relative range'] > upper_bound]
-    
-    # 检测下侧异常值
-    lower_outliers = data_frame_with_relative_ranges[data_frame_with_relative_ranges['relative range'] < lower_bound]
-    
-    # 获取上侧异常值的索引（即异常通道的标识）
-    upper_output_channels_list = upper_outliers.index.tolist()
-    
-    # 获取下侧异常值的索引（即异常通道的标识）
-    lower_output_channels_list = lower_outliers.index.tolist()
-    
-    # 返回上侧和下侧异常通道列表
-    return upper_output_channels_list + lower_output_channels_list
-
-    
-    # # 定义异常值的阈值：大于 Q3 + 1.5 * IQR
-    # v = (data_frame_with_relative_ranges > (Q3 + 1.5 * IQR))
-    
-    # # 将布尔序列转换为数据框
-    # v_df = v.to_frame()
-    
-    # # 只保留异常值（True）的行
-    # keep_only_outliers = v_df.loc[v_df['relative range']]
-    
-    # # 获取异常值的索引（即异常通道的标识）
-    # output_channels_list = keep_only_outliers.index
-    
-    # # 返回异常通道列表
-    # return output_channels_list
-
+    return outliers
 
 def identify_problematic_output_channels(weights_stats):
     """
@@ -460,7 +428,7 @@ def identify_problematic_output_channels(weights_stats):
     all_output_channel_ranges = described_df["relative range"]
     
     # 使用detect_outlier_channels 函数检测异常通道
-    output_channels_needed = detect_outlier_channels(all_output_channel_ranges)
+    output_channels_needed = detect_outlier_channels(all_output_channel_ranges, "relative range")
 
     # 返回异常通道列表和所有通道的相对范围
     return output_channels_needed, all_output_channel_ranges
@@ -528,17 +496,17 @@ def visualize_relative_weight_ranges_single_layer(layer, layer_name):
     :param model: p
     :return:
     """
-    layer_weights_data_frame = pd.DataFrame(get_weights(layer)).describe().T
+    layer_weights_data_frame = pd.DataFrame(get_torch_weights(layer)).describe().T
     plot = line_plot_summary_statistics_model(layer_name, layer_weights_data_frame, width=1150, height=700)
 
     # list of problematic output channels, data frame containing magnitude of range in each output channel
-    problematic_output_channels, output_channel_ranges_data_frame = identify_problematic_output_channels(
-        layer_weights_data_frame)
+    problematic_output_channels, output_channel_ranges_data_frame = identify_problematic_output_channels(layer_weights_data_frame)
 
     histogram_plot = histogram(output_channel_ranges_data_frame, "relative range", 75,
                                x_label="Weight Range Relative to Smallest Output Channel",
                                y_label="Count",
                                title="Relative Ranges For All Output Channels")
+    
     output_channel_ranges_data_frame = output_channel_ranges_data_frame.describe().T.to_frame()
     output_channel_ranges_data_frame = output_channel_ranges_data_frame.drop("count")
 
@@ -546,7 +514,10 @@ def visualize_relative_weight_ranges_single_layer(layer, layer_name):
         output_channel_ranges_data_frame)
 
     # add vertical lines to highlight problematic channels
-    for channel in problematic_output_channels:
+    for channel in problematic_output_channels["upper"]:
+        add_vertical_line_to_figure(channel, plot)
+    
+    for channel in problematic_output_channels["lower"]:
         add_vertical_line_to_figure(channel, plot)
 
     # push plot to server document
@@ -614,7 +585,7 @@ def visualize_weight_ranges_single_layer(layer, layer_name, scatter_plot=False):
     layer.cpu()
     
     # 获取当前层的权重
-    layer_weights = pd.DataFrame(get_weights(layer))
+    layer_weights = pd.DataFrame(get_torch_weights(layer))
     
     # 得到每一个权重的通道的统计量
     layer_weights_summary_statistics = layer_weights.describe().T
@@ -756,18 +727,39 @@ def visualize_torch_model_weights(model: torch.nn.Module , model_name: str, resu
 
 
 def get_onnx_model_weights(onnx_path: str) -> Dict[str, np.ndarray]:
-    """
+    """get_onnx_model_weights 
     Extract weights from an ONNX model.
     
     :param onnx_path: Path to the ONNX model file
     :return: Dictionary of weight names and their corresponding numpy arrays
     """
     model = onnx.load(onnx_path)
-    weights = {}
-    for init in model.graph.initializer:
-        if init.data_type == onnx.TensorProto.FLOAT:
-            weights[init.name] = onnx.numpy_helper.to_array(init)
-    return weights
+    
+    # 验证模型有效性
+    onnx.checker.check_model(model)  
+    
+    weights = OrderedDict()
+    
+    weight_tensor = OrderedDict()
+    need_transpose = []
+    for node in model.graph.node:
+        if node.op_type in config.config_spectrautils["LAYER_HAS_WEIGHT_TORCH"]:
+            for in_tensor in node.input[1:]: # 从 1 开始遍历权重
+                weight_tensor[in_tensor] = onnx.numpy_helper.to_array(in_tensor) # 获取权重
+            if node.op_type == 'ConvTranspose':
+                need_transpose.append(node.input[1])
+    
+    weight_clip_val = {}
+    for name, tensor in weight_tensor.items():
+        
+        # BN tracked param do not have shape.
+        if len(tensor.shape) < 1:
+            continue
+        if name in need_transpose:
+            tensor = tensor.transpose([1, 0, 2, 3])
+        weight_clip_val[name] = tensor
+        
+    return weight_clip_val
 
 
 
@@ -779,6 +771,7 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     :param model_name: Name of the model (for naming the results directory)
     :param results_dir: Directory to save the visualization results. If None, will create based on model name
     """
+    
     # Set default results directory if none provided
     if results_dir is None:
         results_dir = f"{model_name}_onnx_visualization_results"
@@ -795,46 +788,48 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     print(f"Loaded {model_name} ONNX model from {onnx_path}")
     print(f"Found {len(weights)} weight tensors")
     
-    print("Generating weight range visualizations...")
-    
-    # 修改这里：创建一个更合适的伪模型类
-    class PseudoModel:
-        def __init__(self, weights):
-            self._weights = weights
-            
-        def named_modules(self):
-            # 返回权重字典的items
-            return self._weights.items()
-            
-        def parameters(self):
-            # 为了兼容某些可能需要parameters的函数
-            return iter(self._weights.values())
-    
-    # 使用新的PseudoModel类
-    pseudo_model = PseudoModel(weights)
-    
-    # Visualize weight ranges for all layers
-    visualize_weight_ranges(
-        model=pseudo_model,
-        results_dir=results_dir
-    )
-    
-    print("Generating relative weight range visualizations...")
-    # Visualize relative weight ranges to identify potential problematic layers
-    visualize_relative_weight_ranges_to_identify_problematic_layers(
-        model=pseudo_model,
-        results_dir=results_dir
-    )
+    # print("Generating weight range visualizations...")
     
     print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
 
+
+def export_model_onnx(model, path):
+    dummy_input = torch.randn(1, 3, 224, 224)
+    # 导出模型到ONNX
+    torch.onnx.export(
+        model,                    # 要导出的模型
+        dummy_input,              # 模型的输入
+        path,                     # 保存ONNX模型的路径
+        export_params=True,       # 存储训练好的参数权重
+        opset_version=11,         # ONNX版本
+        do_constant_folding=True, # 是否执行常量折叠优化
+        input_names=['input'],    # 输入节点的名称
+        output_names=['output'],  # 输出节点的名称
+    )
+    
+    
    
 if __name__ == "__main__":
     onnx_path = "/share/cdd/onnx_models/od_bev_0324.onnx"
     input_name, output_name = get_onnx_model_io_info(onnx_path)
     
-    
     # Example usage with different models
-    model = torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-    visualize_torch_model_weights(model, "resnet18")
+    model_old = torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+    
+    # 加载你的本地模型
+    model_new = torch.load('/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet_model_cle_bc.pt')
+
+    # model_new = torchvision.models.resnet18(pretrained=False)
+    # model_new.load_state_dict(torch.load('/mnt/share_disk/bruce_trie/workspace/Quantizer-Tools/resnet_model_cle_bc.pt'))
+
+    # model_new.load_state_dict(loaded_model)
+    
+    visualize_torch_model_weights(model_new, "resnet18_new")
+    # visualize_changes_after_optimization(model_old, model_new, "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils")
     # visualize_onnx_model_weights(onnx_path, "od_bev_0324")
+    
+    
+    # export_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
+    # model_export_onnx(model_old, export_path)
+    
+    
