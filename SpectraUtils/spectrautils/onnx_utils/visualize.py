@@ -2,14 +2,13 @@ import time, os
 from config import *
 import numpy as np
 from collections import OrderedDict
-import onnxruntime as ort
+# import onnxruntime as ort
 from tqdm import tqdm
 from typing import List, Dict
 import torch, torchvision, onnx
 from  torchvision.models import ResNet18_Weights
 import pandas as pd
 from multiprocessing import Pool
-from functools import partial
 from concurrent.futures import ProcessPoolExecutor
 
 from datetime import datetime
@@ -17,10 +16,15 @@ import holoviews as hv
 import hvplot.pandas  # pylint:disable=unused-import
 import config_spectrautils as config
 
+import matplotlib.pyplot as plt
+import io
+import base64
+
 from bokeh import plotting
 from bokeh.layouts import row, column, Spacer
 from bokeh.plotting import figure
 from bokeh.models import Div
+from bokeh.models import DataTable, TableColumn, CustomJS, Div
 from bokeh.models import HoverTool, WheelZoomTool, ColumnDataSource
 from bokeh.models import HoverTool, ColumnDataSource, Span, TableColumn, DataTable
 from spectrautils import logging_utils, print_utils
@@ -537,6 +541,48 @@ def visualize_relative_weight_ranges_single_layer(layer, layer_name):
 
     return layout_with_title
 
+
+def visualize_relative_onnx_weight_ranges_single_layer(layer_weights_data_frame, layer_name, tensor_nums):
+    """
+    publishes a line plot showing  weight ranges for each layer, summary statistics
+    for relative weight ranges, and a histogram showing weight ranges of output channels
+
+    :param model: p
+    :return:
+    """
+    # layer_weights_data_frame = pd.DataFrame(get_torch_weights(layer)).describe().T
+    plot = line_plot_summary_statistics_model(layer_name, layer_weights_data_frame, width=1150, height=700)
+
+    # list of problematic output channels, data frame containing magnitude of range in each output channel
+    problematic_output_channels, output_channel_ranges_data_frame = identify_problematic_output_channels(layer_weights_data_frame)
+
+    histogram_plot = histogram(output_channel_ranges_data_frame, "relative range", 75,
+                               x_label="Weight Range Relative to Smallest Output Channel",
+                               y_label="Count",
+                               title="Relative Ranges For All Output Channels")
+    
+    output_channel_ranges_data_frame = output_channel_ranges_data_frame.describe().T.to_frame()
+    output_channel_ranges_data_frame = output_channel_ranges_data_frame.drop("count")
+
+    output_channel_ranges_as_column_data_source = convert_pandas_data_frame_to_bokeh_data_table(
+        output_channel_ranges_data_frame)
+
+        
+    # add vertical lines to highlight problematic channels
+    for channel in problematic_output_channels["upper"]:
+        add_vertical_line_to_figure(channel, plot)
+    
+    for channel in problematic_output_channels["lower"]:
+        add_vertical_line_to_figure(channel, plot)
+
+
+    # push plot to server document
+    column_layout = column(histogram_plot, output_channel_ranges_as_column_data_source)
+    layout = row(plot, column_layout)
+    layout_with_title = add_title(layout, layer_name)
+
+    return layout_with_title
+
 def visualize_changes_after_optimization(
         old_model: torch.nn.Module,
         new_model: torch.nn.Module,
@@ -662,10 +708,7 @@ def visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, 
         layout = line_plots
     layout_with_title = add_title(layout, layer_name)
 
-    # Move layer back to device
-    # layer.to(device=device)
     return layout_with_title
-
 
 
 def visualize_weight_ranges(
@@ -693,7 +736,6 @@ def visualize_weight_ranges(
                 subplots.append(visualize_weight_ranges_single_layer(module, name))
     else:
         for name, module in model.named_modules():
-            # if hasattr(module, "weight") and isinstance(module, (torch.nn.modules.conv.Conv2d, torch.nn.modules.linear.Linear)):
             if hasattr(module, "weight") and isinstance(module, tuple(config.config_spectrautils["LAYER_HAS_WEIGHT_TORCH"])):
                 subplots.append(visualize_weight_ranges_single_layer(module, name))
 
@@ -711,8 +753,8 @@ def process_layer_data(name_value):
 def visualize_onnx_weight_ranges(
         weights: OrderedDict,
         results_dir: str,
+        num_processes: int=16,
         selected_layers: List = None,
-        num_processes: int=16
 ) -> List[plotting.figure]:
     """
     Visualizes weight ranges for each layer through a scatter plot showing mean plotted against the standard deviation,
@@ -733,9 +775,6 @@ def visualize_onnx_weight_ranges(
     
     if selected_layers:
         raise NotImplementedError("Visualization for selected ONNX layers is not implemented yet.")
-    # else:
-    #     for name, value in tqdm(weights.items(), desc="Processing layers", unit="layer"):
-    #         subplots.append(visualize_onnx_weight_ranges_single_layer(value, name))
     
    
     # 使用ProcessPoolExecutor进行并行处理
@@ -745,10 +784,11 @@ def visualize_onnx_weight_ranges(
         # 使用tqdm显示进度
         for future in tqdm(futures, total=len(weights), desc="Processing layers", unit="layer"):
             name, layer_weights_summary_statistics = future.result()
+            
             # 在主进程中创建Bokeh图表
             subplot = visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name)
+            # subplot = visualize_onnx_weight_ranges_single_layer_quick(layer_weights_summary_statistics, name)
             subplots.append(subplot)
-        
     
     # ===================================
     # 创建一个居中的布局
@@ -762,6 +802,53 @@ def visualize_onnx_weight_ranges(
     print(f"Visualization saved to: {file_path}")
     return subplots
     # ===================================
+
+
+
+def visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(
+        weights: OrderedDict,
+        results_dir: str,
+        num_processes: int=16,
+        selected_layers: List = None,
+) -> List[plotting.figure]:
+    """
+    For each of the selected layers, publishes a line plot showing  weight ranges for each layer, summary statistics
+    for relative weight ranges, and a histogram showing weight ranges of output channels
+    with respect to the minimum weight range.
+
+    :param model: pytorch model
+    :param results_dir: Directory to save the Bokeh plots
+    :param selected_layers: a list of layers a user can choose to have visualized. If selected layers is None,
+        all Linear and Conv layers will be visualized.
+    :return: A list of bokeh plots
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f'{timestamp}_visualize_relative_weight_ranges_to_identify_problematic_layers.html'
+    file_path = os.path.join(results_dir, file_name)
+    plotting.output_file(file_path)
+    subplots = []
+    
+    if selected_layers:
+        raise NotImplementedError("Visualization for selected ONNX layers is not implemented yet.")
+    
+    
+    tensor_weights_num = len(weights)
+    
+    # 使用ProcessPoolExecutor进行并行处理
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        futures = [executor.submit(process_layer_data, item) for item in weights.items()]
+        
+        # 使用tqdm显示进度
+        for future in tqdm(futures, total=len(weights), desc="Processing relative range", unit="layer"):
+            name, layer_weights_summary_statistics = future.result()
+            
+            # 在主进程中创建Bokeh图表
+            subplot = visualize_relative_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name, tensor_weights_num)
+            subplots.append(subplot)
+  
+
+    plotting.save(column(subplots))
+    return subplots
 
 
 def visualize_relative_weight_ranges_to_identify_problematic_layers(
@@ -866,7 +953,9 @@ def get_onnx_model_weights(onnx_path: str) -> Dict[str, np.ndarray]:
     for node in model.graph.node:
         if node.op_type in config.config_spectrautils["LAYER_HAS_WEIGHT_ONNX"]:
             if len(node.input) > 1:
-                for in_tensor_name in node.input[1:2]:  # 从 1 开始遍历权重
+                
+                # 从 这里只选择 第2个输入，也就是权重，bias不考虑 
+                for in_tensor_name in node.input[1:2]: 
                     weight_tensor[in_tensor_name] = onnx.numpy_helper.to_array(initializers[in_tensor_name])
                 if node.op_type == 'ConvTranspose':
                     need_transpose.append(in_tensor_name)
@@ -906,17 +995,20 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
         raise ValueError(f"Failed to load ONNX model from {onnx_path}. Error: {str(e)}")
     
     print(f"Loaded {model_name} ONNX model from {onnx_path}")
+    
     print_utils.print_colored_box(f"Found {len(weights)} weight tensors")
     
+    # 只可视化权重
     visualize_onnx_weight_ranges(weights, results_dir)
     
-    # print("Generating weight range visualizations...")
+    
+    # 可视化权重和输出
+    visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(weights, results_dir)
+    
     
     print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
 
-    
-    
-   
+
 if __name__ == "__main__":
     # onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
     onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
