@@ -634,17 +634,12 @@ def visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, 
     :param scatter_plot: Include scatter plot in plots
     :return: None
     """
-    
-    # 获取当前层的权重
-    # layer_weights = pd.DataFrame(get_onnx_weights(weight_data))
-    
-    # 得到每一个权重的通道的统计量
-    # layer_weights_summary_statistics = layer_weights.describe().T
+
 
     line_plots = line_plot_summary_statistics_model(
         layer_name=layer_name,
         layer_weights_data_frame=layer_weights_summary_statistics,
-        width=1000,
+        width=1500,
         height=700,
         # sizing_mode='scale_width'  # 使图表宽度可缩放
     )
@@ -730,7 +725,7 @@ def visualize_onnx_weight_ranges(
     :return: A list of bokeh plots
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f'visualize_onnx_weight_ranges_{timestamp}.html'
+    file_name = f'{timestamp}_visualize_onnx_weight_ranges.html'
     file_path = os.path.join(results_dir, file_name)
     plotting.output_file(file_path)
     
@@ -754,9 +749,19 @@ def visualize_onnx_weight_ranges(
             subplot = visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name)
             subplots.append(subplot)
         
-        
-    plotting.save(column(subplots))
+    
+    # ===================================
+    # 创建一个居中的布局
+    layout = column(
+        subplots,
+        sizing_mode='stretch_width',  # 使布局在水平方向上填充
+        styles={'margin': '0 auto', 'max-width': '1600px'}  # 设置最大宽度并居中
+    )
+
+    plotting.save(layout)
+    print(f"Visualization saved to: {file_path}")
     return subplots
+    # ===================================
 
 
 def visualize_relative_weight_ranges_to_identify_problematic_layers(
@@ -930,6 +935,7 @@ if __name__ == "__main__":
     
     # visualize_torch_model_weights(model_new, "resnet18_new")
     # visualize_changes_after_optimization(model_old, model_new, "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils")
+    # visualize_onnx_model_weights(onnx_path, "resnet18")
     visualize_onnx_model_weights(onnx_path, "od_bev")
     
     
