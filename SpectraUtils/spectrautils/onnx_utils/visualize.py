@@ -3,18 +3,23 @@ from config import *
 import numpy as np
 from collections import OrderedDict
 import onnxruntime as ort
+from tqdm import tqdm
 from typing import List, Dict
 import torch, torchvision, onnx
 from  torchvision.models import ResNet18_Weights
-from bokeh import plotting
-from bokeh.layouts import column
-import holoviews as hv
 import pandas as pd
+from multiprocessing import Pool
+from functools import partial
+from concurrent.futures import ProcessPoolExecutor
+
+from datetime import datetime
+import holoviews as hv
 import hvplot.pandas  # pylint:disable=unused-import
 import config_spectrautils as config
-from bokeh.layouts import row
+
+from bokeh import plotting
+from bokeh.layouts import row, column, Spacer
 from bokeh.plotting import figure
-from bokeh.layouts import column
 from bokeh.models import Div
 from bokeh.models import HoverTool, WheelZoomTool, ColumnDataSource
 from bokeh.models import HoverTool, ColumnDataSource, Span, TableColumn, DataTable
@@ -621,7 +626,7 @@ def visualize_weight_ranges_single_layer(layer, layer_name, scatter_plot=False):
 
 
 
-def visualize_onnx_weight_ranges_single_layer(weight_data, layer_name, scatter_plot=False):
+def visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, layer_name, scatter_plot=False):
     """
     Given a layer, visualizes weight ranges with scatter plots and line plots
     :param layer: layer with weights
@@ -631,14 +636,18 @@ def visualize_onnx_weight_ranges_single_layer(weight_data, layer_name, scatter_p
     """
     
     # 获取当前层的权重
-    layer_weights = pd.DataFrame(get_onnx_weights(weight_data))
+    # layer_weights = pd.DataFrame(get_onnx_weights(weight_data))
     
     # 得到每一个权重的通道的统计量
-    layer_weights_summary_statistics = layer_weights.describe().T
+    # layer_weights_summary_statistics = layer_weights.describe().T
 
-    line_plots = line_plot_summary_statistics_model(layer_name=layer_name,
-                                                    layer_weights_data_frame=layer_weights_summary_statistics,
-                                                    width=1000, height=700)
+    line_plots = line_plot_summary_statistics_model(
+        layer_name=layer_name,
+        layer_weights_data_frame=layer_weights_summary_statistics,
+        width=1000,
+        height=700,
+        # sizing_mode='scale_width'  # 使图表宽度可缩放
+    )
 
     if scatter_plot:
         scatter_plot_mean, scatter_plot_min = scatter_plot_summary_stats(layer_weights_summary_statistics,
@@ -649,9 +658,11 @@ def visualize_onnx_weight_ranges_single_layer(weight_data, layer_name, scatter_p
                                                                          y_axis_label_min="Max Weights Per Output Channel",
                                                                          title_min="Minimum vs Maximum: " + layer_name)
 
-        scatter_plots_layout = row(scatter_plot_mean, scatter_plot_min)
+        scatter_plots_layout = row(scatter_plot_mean, scatter_plot_min, sizing_mode='scale_width')
 
-        layout = column(scatter_plots_layout, line_plots)
+        # layout = column(scatter_plots_layout, line_plots)
+        layout = column(scatter_plots_layout, Spacer(height=20), line_plots, sizing_mode='scale_width')
+
     else:
         layout = line_plots
     layout_with_title = add_title(layout, layer_name)
@@ -693,12 +704,20 @@ def visualize_weight_ranges(
 
     plotting.save(column(subplots))
     return subplots
-
-
+    
+ 
+def process_layer_data(name_value):
+    name, value = name_value
+    layer_weights = pd.DataFrame(get_onnx_weights(value))
+    layer_weights_summary_statistics = layer_weights.describe().T
+    return name, layer_weights_summary_statistics
+   
+    
 def visualize_onnx_weight_ranges(
         weights: OrderedDict,
         results_dir: str,
-        selected_layers: List = None
+        selected_layers: List = None,
+        num_processes: int=16
 ) -> List[plotting.figure]:
     """
     Visualizes weight ranges for each layer through a scatter plot showing mean plotted against the standard deviation,
@@ -710,16 +729,32 @@ def visualize_onnx_weight_ranges(
     :param results_dir: Directory to save the Bokeh plots
     :return: A list of bokeh plots
     """
-
-    file_path = os.path.join(results_dir, 'visualize_onnx_weight_ranges.html')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f'visualize_onnx_weight_ranges_{timestamp}.html'
+    file_path = os.path.join(results_dir, file_name)
     plotting.output_file(file_path)
+    
     subplots = []
+    
     if selected_layers:
         raise NotImplementedError("Visualization for selected ONNX layers is not implemented yet.")
-    else:
-        for name, value in weights.items():            
-            subplots.append(visualize_onnx_weight_ranges_single_layer(value, name))
-
+    # else:
+    #     for name, value in tqdm(weights.items(), desc="Processing layers", unit="layer"):
+    #         subplots.append(visualize_onnx_weight_ranges_single_layer(value, name))
+    
+   
+    # 使用ProcessPoolExecutor进行并行处理
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        futures = [executor.submit(process_layer_data, item) for item in weights.items()]
+        
+        # 使用tqdm显示进度
+        for future in tqdm(futures, total=len(weights), desc="Processing layers", unit="layer"):
+            name, layer_weights_summary_statistics = future.result()
+            # 在主进程中创建Bokeh图表
+            subplot = visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name)
+            subplots.append(subplot)
+        
+        
     plotting.save(column(subplots))
     return subplots
 
@@ -878,7 +913,8 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     
    
 if __name__ == "__main__":
-    onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
+    # onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
+    onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
     # input_name, output_name = get_onnx_model_io_info(onnx_path)
     
     # Example usage with different models
@@ -894,7 +930,7 @@ if __name__ == "__main__":
     
     # visualize_torch_model_weights(model_new, "resnet18_new")
     # visualize_changes_after_optimization(model_old, model_new, "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils")
-    visualize_onnx_model_weights(onnx_path, "resnet18")
+    visualize_onnx_model_weights(onnx_path, "od_bev")
     
     
     # export_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
