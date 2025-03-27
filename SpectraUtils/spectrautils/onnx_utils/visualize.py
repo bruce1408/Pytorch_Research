@@ -600,7 +600,7 @@ def visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_data_
     p = figure(title=f"Weight Ranges per Output Channel: {layer_name}", 
                x_axis_label="Output Channels", 
                y_axis_label="Summary Statistics",
-               width=900, 
+               width=1000, 
                height=500,
                tools="")  # Empty string means no tools
 
@@ -637,7 +637,7 @@ def visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_data_
     h = figure(title="Relative Ranges For All Output Channels",
                x_axis_label="Weight Range Relative to Smallest Output Channel",
                y_axis_label="Count",
-               width=900, height=500,
+               width=600, height=500,
                tools="")
 
     h.quad(bottom=0, top='count', left='left', right='right', source=hist_source,
@@ -738,18 +738,20 @@ def visualize_weight_ranges_single_layer(layer, layer_name, scatter_plot=False):
     # 得到每一个权重的通道的统计量
     layer_weights_summary_statistics = layer_weights.describe().T
 
-    line_plots = line_plot_summary_statistics_model(layer_name=layer_name,
-                                                    layer_weights_data_frame=layer_weights_summary_statistics,
-                                                    width=1000, height=700)
+    line_plots = line_plot_summary_statistics_model(
+        layer_name=layer_name,
+        layer_weights_data_frame=layer_weights_summary_statistics,
+        width=1000, height=700)
 
     if scatter_plot:
-        scatter_plot_mean, scatter_plot_min = scatter_plot_summary_stats(layer_weights_summary_statistics,
-                                                                         x_axis_label_mean="Mean Weights Per Output Channel",
-                                                                         y_axis_label_mean="Std Per Output Channel",
-                                                                         title_mean="Mean vs Standard Deviation: " + layer_name,
-                                                                         x_axis_label_min="Min Weights Per Output Channel",
-                                                                         y_axis_label_min="Max Weights Per Output Channel",
-                                                                         title_min="Minimum vs Maximum: " + layer_name)
+        scatter_plot_mean, scatter_plot_min = scatter_plot_summary_stats(
+            layer_weights_summary_statistics,
+            x_axis_label_mean="Mean Weights Per Output Channel",
+            y_axis_label_mean="Std Per Output Channel",
+            title_mean="Mean vs Standard Deviation: " + layer_name,
+            x_axis_label_min="Min Weights Per Output Channel",
+            y_axis_label_min="Max Weights Per Output Channel",
+            title_min="Minimum vs Maximum: " + layer_name)
 
         scatter_plots_layout = row(scatter_plot_mean, scatter_plot_min)
 
@@ -792,10 +794,7 @@ def visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, 
                                                                          title_min="Minimum vs Maximum: " + layer_name)
 
         scatter_plots_layout = row(scatter_plot_mean, scatter_plot_min, sizing_mode='scale_width')
-
-        # layout = column(scatter_plots_layout, line_plots)
         layout = column(scatter_plots_layout, Spacer(height=20), line_plots, sizing_mode='scale_width')
-
     else:
         layout = line_plots
     layout_with_title = add_title(layout, layer_name)
@@ -935,10 +934,12 @@ def visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(
             name, layer_weights_summary_statistics = future.result()
             
             # 在主进程中创建Bokeh图表
-            subplot = visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_summary_statistics, name)
+            if tensor_weights_num > 300 :
+                subplot = visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_summary_statistics, name)
+            else:
+                subplot = visualize_relative_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name)
             subplots.append(subplot)
-  
-
+    
     plotting.save(column(subplots, sizing_mode='scale_width', align='center'))
     return subplots
 
@@ -1093,15 +1094,15 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     # 只可视化权重
     # visualize_onnx_weight_ranges(weights, results_dir)
     
-    # 可视化权重和输出
+    # 可视化权重和有问题的输出
     visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(weights, results_dir)
     
     print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
 
 
 if __name__ == "__main__":
-    onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
-    # onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
+    # onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
+    onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
     # input_name, output_name = get_onnx_model_io_info(onnx_path)
     
     # Example usage with different models
@@ -1113,12 +1114,11 @@ if __name__ == "__main__":
     # model_new = torchvision.models.resnet18(pretrained=False)
     # model_new.load_state_dict(torch.load('/mnt/share_disk/bruce_trie/workspace/Quantizer-Tools/resnet_model_cle_bc.pt'))
 
-    # model_new.load_state_dict(loaded_model)
     
     # visualize_torch_model_weights(model_new, "resnet18_new")
     # visualize_changes_after_optimization(model_old, model_new, "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils")
-    visualize_onnx_model_weights(onnx_path, "resnet18")
-    # visualize_onnx_model_weights(onnx_path, "od_bev")
+    # visualize_onnx_model_weights(onnx_path, "resnet18")
+    visualize_onnx_model_weights(onnx_path, "od_bev")
     
     
     # export_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
