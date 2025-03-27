@@ -546,7 +546,6 @@ def visualize_relative_onnx_weight_ranges_single_layer(layer_weights_data_frame,
     """
     publishes a line plot showing  weight ranges for each layer, summary statistics
     for relative weight ranges, and a histogram showing weight ranges of output channels
-
     :param model: p
     :return:
     """
@@ -556,7 +555,9 @@ def visualize_relative_onnx_weight_ranges_single_layer(layer_weights_data_frame,
     # list of problematic output channels, data frame containing magnitude of range in each output channel
     problematic_output_channels, output_channel_ranges_data_frame = identify_problematic_output_channels(layer_weights_data_frame)
 
-    histogram_plot = histogram(output_channel_ranges_data_frame, "relative range", 75,
+    histogram_plot = histogram(output_channel_ranges_data_frame,
+                               "relative range", 
+                               75,
                                x_label="Weight Range Relative to Smallest Output Channel",
                                y_label="Count",
                                title="Relative Ranges For All Output Channels")
@@ -582,6 +583,102 @@ def visualize_relative_onnx_weight_ranges_single_layer(layer_weights_data_frame,
     layout_with_title = add_title(layout, layer_name)
 
     return layout_with_title
+
+
+def visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_data_frame, layer_name):
+    """
+    Creates a static-like Bokeh plot showing weight ranges for each layer and a histogram.
+    The histogram is placed on the right side of the line plot.
+    """
+    
+    problematic_output_channels, output_channel_ranges_data_frame = identify_problematic_output_channels(layer_weights_data_frame)
+
+    # Create line plot
+    source = ColumnDataSource(layer_weights_data_frame)
+    p = figure(title=f"Weight Ranges per Output Channel: {layer_name}", 
+               x_axis_label="Output Channels", 
+               y_axis_label="Summary Statistics",
+               width=900, height=500,
+               tools="")  # Empty string means no tools
+
+    p.line('index', 'min', line_color='#2171b5', line_width=2, legend_label="Min", source=source)
+    p.line('index', 'max', line_color='green', line_width=2, legend_label="Max", source=source)
+    p.line('index', 'mean', line_color='orange', line_width=2, legend_label="Mean", source=source)
+    
+    p.legend.click_policy = "hide"
+
+    # Add hover tool (this will still work even without other interactive tools)
+    hover = HoverTool(tooltips=[
+        ("Channel", "@index"),
+        ("Min", "@min{0.00}"),
+        ("Max", "@max{0.00}"),
+        ("Mean", "@mean{0.00}")
+    ])
+    p.add_tools(hover)
+    
+    # 添加垂直线标记异常通道
+    for channel in problematic_output_channels["upper"]:
+        p.add_layout(Span(location=channel, dimension='height', line_color='#F01DA9', 
+                         line_dash='dashed', line_width=1))
+    
+    for channel in problematic_output_channels["lower"]:
+        p.add_layout(Span(location=channel, dimension='height', line_color='#531DF0', 
+                         line_dash='dashed', line_width=1))
+        
+
+    # Create histogram
+    hist, edges = np.histogram(output_channel_ranges_data_frame, bins=50)
+    hist_df = pd.DataFrame({'count': hist, 'left': edges[:-1], 'right': edges[1:]})
+    hist_source = ColumnDataSource(hist_df)
+
+    h = figure(title="Relative Ranges For All Output Channels",
+               x_axis_label="Weight Range Relative to Smallest Output Channel",
+               y_axis_label="Count",
+               width=600, height=500,
+               tools="")
+
+    h.quad(bottom=0, top='count', left='left', right='right', source=hist_source,
+           fill_color="navy", line_color="white", alpha=0.5)
+
+    
+    # 在直方图中添加垂直线标记异常值的阈值
+    Q1 = layer_weights_data_frame["relative range"].quantile(0.25)
+    Q3 = layer_weights_data_frame["relative range"].quantile(0.75)
+    IQR = Q3 - Q1
+    upper_bound = Q3 + 1.5 * IQR
+    lower_bound = Q1 - 1.5 * IQR
+
+    h.add_layout(Span(location=upper_bound, dimension='height', line_color='red',
+                     line_dash='dashed', line_width=1))
+    h.add_layout(Span(location=lower_bound, dimension='height', line_color='blue',
+                     line_dash='dashed', line_width=1))
+    
+    
+    # ==============================================
+    # 创建一个居中的布局
+    layout = row(
+        p, h,
+        sizing_mode='scale_width',  # 使布局在水平方向上可缩放
+        styles={'margin': '0 auto', 'max-width': '1600px'}  # 设置最大宽度并居中
+    )
+
+    # 使用column包装row，以便应用全局样式
+    final_layout = column(
+        layout,
+        sizing_mode='stretch_width',  # 使布局在水平方向上填充
+        styles={'margin': '0 auto', 'max-width': '1600px'}  # 设置最大宽度并居中
+    )
+    # ==============================================
+
+
+    # Combine plots side by side
+    # layout = row(p, h)
+    
+    return final_layout
+
+
+
+
 
 def visualize_changes_after_optimization(
         old_model: torch.nn.Module,
@@ -843,7 +940,7 @@ def visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(
             name, layer_weights_summary_statistics = future.result()
             
             # 在主进程中创建Bokeh图表
-            subplot = visualize_relative_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name, tensor_weights_num)
+            subplot = visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_summary_statistics, name)
             subplots.append(subplot)
   
 
@@ -999,18 +1096,16 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     print_utils.print_colored_box(f"Found {len(weights)} weight tensors")
     
     # 只可视化权重
-    visualize_onnx_weight_ranges(weights, results_dir)
-    
+    # visualize_onnx_weight_ranges(weights, results_dir)
     
     # 可视化权重和输出
     visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(weights, results_dir)
-    
     
     print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
 
 
 if __name__ == "__main__":
-    # onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
+    onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
     onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
     # input_name, output_name = get_onnx_model_io_info(onnx_path)
     
