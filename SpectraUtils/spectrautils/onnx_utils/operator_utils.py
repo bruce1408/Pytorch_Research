@@ -38,6 +38,7 @@ def print_model_operators(model_path: str, detailed: bool = False) -> None:
                     print()
                     
 if __name__ == "__main__":
+    
     onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
     print_model_operators(onnx_path)
     

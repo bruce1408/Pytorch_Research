@@ -11,10 +11,11 @@ import pandas as pd
 from multiprocessing import Pool
 from concurrent.futures import ProcessPoolExecutor
 from common_tools import process_layer_data,get_onnx_model_weights
+import config_spectrautils as config
+
 from datetime import datetime
 import holoviews as hv
 import hvplot.pandas  # pylint:disable=unused-import
-import config_spectrautils as config
 
 import matplotlib.pyplot as plt
 import io
@@ -967,8 +968,4 @@ if __name__ == "__main__":
     # visualize_onnx_model_weights(onnx_path, "resnet18")
     visualize_onnx_model_weights(onnx_path, "od_bev")
     
-    
-    
-    # export_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
-    # model_export_onnx(model_old, export_path)
     

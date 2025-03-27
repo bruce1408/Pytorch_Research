@@ -1,11 +1,6 @@
 import os
 import torch, onnx
 
-config_operator = {
-    "save_dir" : "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/ONNX_Operator_Vis/output_onnx"
-}
-
-
 config_spectrautils = {
     "LAYER_HAS_WEIGHT_ONNX" : ['Conv', 'Gemm', 'ConvTranspose', 'PRelu', 'BatchNormalization'],
     

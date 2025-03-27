@@ -57,4 +57,6 @@ def export_model_onnx():
     """
     print(export_onnx_str)
     
-export_model_onnx()
+    
+if __name__ == "__main__":
+    export_model_onnx()
