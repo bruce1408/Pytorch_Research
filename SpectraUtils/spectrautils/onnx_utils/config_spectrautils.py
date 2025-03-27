@@ -1,14 +1,9 @@
 import os
-import onnx
-import torch
-
-dogs_cats_dataset_path = '/mnt/share_disk/bruce_trie/misc_data_products/dogs_cats'
-
+import torch, onnx
 
 config_operator = {
     "save_dir" : "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/ONNX_Operator_Vis/output_onnx"
 }
-
 
 
 config_spectrautils = {
@@ -32,5 +27,3 @@ config_spectrautils = {
     }
     
 }
-
-

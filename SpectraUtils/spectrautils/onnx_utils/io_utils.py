@@ -1,4 +1,4 @@
-import onnx
+import onnx, torch
 import onnxruntime as ort
 from collections import OrderedDict
 
@@ -37,3 +37,24 @@ def get_onnx_model_input_output_info(onnx_path:str)->OrderedDict:
     
     # 返回输入和输出信息
     return input_info, output_info
+
+
+def export_model_onnx():
+    dummy_input = torch.randn(1, 3, 224, 224)
+    
+    # 导出模型到ONNX
+    export_onnx_str = """
+        torch.onnx.export(
+            model,                    # 要导出的模型
+            dummy_input,              # 模型的输入
+            path,                     # 保存ONNX模型的路径
+            export_params=True,       # 存储训练好的参数权重
+            opset_version=11,         # ONNX版本
+            do_constant_folding=True, # 是否执行常量折叠优化
+            input_names=['input'],    # 输入节点的名称
+            output_names=['output'],  # 输出节点的名称
+        )
+    """
+    print(export_onnx_str)
+    
+export_model_onnx()
