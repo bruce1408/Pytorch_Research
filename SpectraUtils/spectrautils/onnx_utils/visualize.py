@@ -4,13 +4,13 @@ import numpy as np
 from collections import OrderedDict
 # import onnxruntime as ort
 from tqdm import tqdm
-from typing import List, Dict
+from typing import List, Dict, Union
 import torch, torchvision, onnx
 from  torchvision.models import ResNet18_Weights
 import pandas as pd
 from multiprocessing import Pool
 from concurrent.futures import ProcessPoolExecutor
-
+from common_tools import process_layer_data,get_onnx_model_weights
 from datetime import datetime
 import holoviews as hv
 import hvplot.pandas  # pylint:disable=unused-import
@@ -25,10 +25,8 @@ from bokeh.resources import CDN
 from bokeh import plotting
 from bokeh.layouts import row, column, Spacer, gridplot
 from bokeh.plotting import figure
-from bokeh.models import Div
 from bokeh.models import DataTable, TableColumn, CustomJS, Div
-from bokeh.models import HoverTool, WheelZoomTool, ColumnDataSource
-from bokeh.models import HoverTool, ColumnDataSource, Span, TableColumn, DataTable
+from bokeh.models import HoverTool, ColumnDataSource, Span, WheelZoomTool
 from spectrautils import logging_utils, print_utils
 
 os.environ["CUDA_VISIBLE_DEVICES"]="2"
@@ -123,33 +121,6 @@ def histogram(data_frame, column_name, num_bins, x_label=None, y_label=None, tit
     style(bokeh_plot)
     return bokeh_plot
 
-
-# def get_torch_weights(conv_module):
-#     """
-#     Returns the weights of a conv_module in a 2d matrix, where each column is an output channel.
-
-#     :param conv_module: convNd module
-#     :return: 2d numpy array
-#     """
-#     output_channel_nums = conv_module.weight.shape[0]
-    
-#     # input_channel * kernel_h * kernel_w
-#     axis_1_length = np.prod(conv_module.weight.shape[1:])
-    
-#     reshaped = conv_module.weight.reshape(int(output_channel_nums), int(axis_1_length))
-    
-#     # 转置
-#     weights = reshaped.detach().numpy().T
-#     return weights
-
-
-def get_onnx_weights(weight_data):
-    
-    # 这样就是把权重参数 变成 [output_channel, input_channel * kernel_h * kernel_w]
-    reshaped = weight_data.reshape(weight_data.shape[0], -1)
-    
-    # numpy 数组的转置
-    return reshaped.T
 
 def get_torch_weights(module):
     """
@@ -544,7 +515,7 @@ def visualize_relative_weight_ranges_single_layer(layer, layer_name):
     return layout_with_title
 
 
-def visualize_relative_onnx_weight_ranges_single_layer(layer_weights_data_frame, layer_name, tensor_nums):
+def visualize_relative_onnx_weight_ranges_single_layer(layer_weights_data_frame, layer_name):
     """
     publishes a line plot showing  weight ranges for each layer, summary statistics
     for relative weight ranges, and a histogram showing weight ranges of output channels
@@ -720,168 +691,100 @@ def visualize_changes_after_optimization(
     return subplots
 
 
-
-def visualize_weight_ranges_single_layer(layer, layer_name, scatter_plot=False):
+def visualize_weight_ranges_single_layer(layer, layer_name, is_onnx=False):
     """
     Given a layer, visualizes weight ranges with scatter plots and line plots
-    :param layer: layer with weights
+    :param layer: layer with weights or layer weights summary statistics for ONNX
     :param layer_name: layer name
-    :param scatter_plot: Include scatter plot in plots
-    :return: None
+    :param is_onnx: Boolean flag to indicate if the input is from an ONNX model
+    :return: Bokeh layout
     """
-    device = get_device(layer)
-    layer.cpu()
-    
-    # 获取当前层的权重
-    layer_weights = pd.DataFrame(get_torch_weights(layer))
-    
-    # 得到每一个权重的通道的统计量
-    layer_weights_summary_statistics = layer_weights.describe().T
-
-    line_plots = line_plot_summary_statistics_model(
-        layer_name=layer_name,
-        layer_weights_data_frame=layer_weights_summary_statistics,
-        width=1000, height=700)
-
-    if scatter_plot:
-        scatter_plot_mean, scatter_plot_min = scatter_plot_summary_stats(
-            layer_weights_summary_statistics,
-            x_axis_label_mean="Mean Weights Per Output Channel",
-            y_axis_label_mean="Std Per Output Channel",
-            title_mean="Mean vs Standard Deviation: " + layer_name,
-            x_axis_label_min="Min Weights Per Output Channel",
-            y_axis_label_min="Max Weights Per Output Channel",
-            title_min="Minimum vs Maximum: " + layer_name)
-
-        scatter_plots_layout = row(scatter_plot_mean, scatter_plot_min)
-
-        layout = column(scatter_plots_layout, line_plots)
+    if not is_onnx:
+        device = get_device(layer)
+        layer.cpu()
+        layer_weights = pd.DataFrame(get_torch_weights(layer))
+        layer_weights_summary_statistics = layer_weights.describe().T
     else:
-        layout = line_plots
-    layout_with_title = add_title(layout, layer_name)
-
-    # Move layer back to device
-    layer.to(device=device)
-    return layout_with_title
-
-
-
-def visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, layer_name, scatter_plot=False):
-    """
-    Given a layer, visualizes weight ranges with scatter plots and line plots
-    :param layer: layer with weights
-    :param layer_name: layer name
-    :param scatter_plot: Include scatter plot in plots
-    :return: None
-    """
-
+        layer_weights_summary_statistics = layer
 
     line_plots = line_plot_summary_statistics_model(
         layer_name=layer_name,
         layer_weights_data_frame=layer_weights_summary_statistics,
         width=1500,
         height=700,
-        # sizing_mode='scale_width'  # 使图表宽度可缩放
     )
 
-    if scatter_plot:
-        scatter_plot_mean, scatter_plot_min = scatter_plot_summary_stats(layer_weights_summary_statistics,
-                                                                         x_axis_label_mean="Mean Weights Per Output Channel",
-                                                                         y_axis_label_mean="Std Per Output Channel",
-                                                                         title_mean="Mean vs Standard Deviation: " + layer_name,
-                                                                         x_axis_label_min="Min Weights Per Output Channel",
-                                                                         y_axis_label_min="Max Weights Per Output Channel",
-                                                                         title_min="Minimum vs Maximum: " + layer_name)
+    scatter_plot_mean, scatter_plot_min = scatter_plot_summary_stats(layer_weights_summary_statistics,
+                                                                     x_axis_label_mean="Mean Weights Per Output Channel",
+                                                                     y_axis_label_mean="Std Per Output Channel",
+                                                                     title_mean="Mean vs Standard Deviation: " + layer_name,
+                                                                     x_axis_label_min="Min Weights Per Output Channel",
+                                                                     y_axis_label_min="Max Weights Per Output Channel",
+                                                                     title_min="Minimum vs Maximum: " + layer_name)
 
-        scatter_plots_layout = row(scatter_plot_mean, scatter_plot_min, sizing_mode='scale_width')
-        layout = column(scatter_plots_layout, Spacer(height=20), line_plots, sizing_mode='scale_width')
-    else:
-        layout = line_plots
+    scatter_plots_layout = row(scatter_plot_mean, scatter_plot_min, sizing_mode='scale_width')
+    layout = column(scatter_plots_layout, Spacer(height=20), line_plots, sizing_mode='scale_width')
     layout_with_title = add_title(layout, layer_name)
+
+    if not is_onnx:
+        layer.to(device=device)
 
     return layout_with_title
 
 
+
 def visualize_weight_ranges(
-        model: torch.nn.Module,
+        model: Union[torch.nn.Module, OrderedDict],
         results_dir: str,
-        selected_layers: List = None
-) -> List[plotting.figure]:
-    """
-    Visualizes weight ranges for each layer through a scatter plot showing mean plotted against the standard deviation,
-    the minimum plotted against the max, and a line plot with min, max, and mean for each output channel.
-
-    :param model: pytorch model
-    :param selected_layers:  a list of layers a user can choose to have visualized. If selected layers is None,
-        all Linear and Conv layers will be visualized.
-    :param results_dir: Directory to save the Bokeh plots
-    :return: A list of bokeh plots
-    """
-
-    file_path = os.path.join(results_dir, 'visualize_weight_ranges.html')
-    plotting.output_file(file_path)
-    subplots = []
-    if selected_layers:
-        for name, module in model.named_modules():
-            if name in selected_layers and hasattr(module, "weight"):
-                subplots.append(visualize_weight_ranges_single_layer(module, name))
-    else:
-        for name, module in model.named_modules():
-            if hasattr(module, "weight") and isinstance(module, tuple(config.config_spectrautils["LAYER_HAS_WEIGHT_TORCH"])):
-                subplots.append(visualize_weight_ranges_single_layer(module, name))
-
-    plotting.save(column(subplots))
-    return subplots
-    
- 
-def process_layer_data(name_value):
-    name, value = name_value
-    layer_weights = pd.DataFrame(get_onnx_weights(value))
-    layer_weights_summary_statistics = layer_weights.describe().T
-    return name, layer_weights_summary_statistics
-   
-    
-def visualize_onnx_weight_ranges(
-        weights: OrderedDict,
-        results_dir: str,
-        num_processes: int=16,
+        num_processes: int = 16,
         selected_layers: List = None,
+        is_onnx: bool = False
 ) -> List[plotting.figure]:
     """
     Visualizes weight ranges for each layer through a scatter plot showing mean plotted against the standard deviation,
     the minimum plotted against the max, and a line plot with min, max, and mean for each output channel.
 
-    :param model: pytorch model
-    :param selected_layers:  a list of layers a user can choose to have visualized. If selected layers is None,
-        all Linear and Conv layers will be visualized.
+    :param model: pytorch model or OrderedDict of ONNX weights
     :param results_dir: Directory to save the Bokeh plots
+    :param num_processes: Number of processes to use for parallel processing (only for ONNX)
+    :param selected_layers: a list of layers a user can choose to have visualized. If selected layers is None,
+        all Linear and Conv layers will be visualized.
+    :param is_onnx: Boolean flag to indicate if the input is an ONNX model
     :return: A list of bokeh plots
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f'{timestamp}_visualize_onnx_weight_ranges.html'
+    file_name = f'{timestamp}_visualize_{"onnx" if is_onnx else "pytorch"}_weight_ranges.html'
     file_path = os.path.join(results_dir, file_name)
     plotting.output_file(file_path)
     
     subplots = []
     
-    if selected_layers:
-        raise NotImplementedError("Visualization for selected ONNX layers is not implemented yet.")
-    
-   
-    # 使用ProcessPoolExecutor进行并行处理
-    with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        futures = [executor.submit(process_layer_data, item) for item in weights.items()]
+    if is_onnx:
+        if selected_layers:
+            raise NotImplementedError("Visualization for selected ONNX layers is not implemented yet.")
         
-        # 使用tqdm显示进度
-        for future in tqdm(futures, total=len(weights), desc="Processing layers", unit="layer"):
-            name, layer_weights_summary_statistics = future.result()
+        # 使用ProcessPoolExecutor进行并行处理
+        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+            futures = [executor.submit(process_layer_data, item) for item in model.items()]
             
-            # 在主进程中创建Bokeh图表
-            subplot = visualize_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name)
-            # subplot = visualize_onnx_weight_ranges_single_layer_quick(layer_weights_summary_statistics, name)
-            subplots.append(subplot)
-    
-    # ===================================
+            # 使用tqdm显示进度
+            for future in tqdm(futures, total=len(model), desc="Processing layers", unit="layer"):
+                name, layer_weights_summary_statistics = future.result()
+                
+                # 在主进程中创建Bokeh图表
+                subplot = visualize_weight_ranges_single_layer(layer_weights_summary_statistics, name, is_onnx=True)
+                subplots.append(subplot)
+    else:
+        if selected_layers:
+            for name, module in model.named_modules():
+                if name in selected_layers and hasattr(module, "weight"):
+                    subplots.append(visualize_weight_ranges_single_layer(module, name))
+        else:
+            for name, module in model.named_modules():
+                if hasattr(module, "weight") and isinstance(module, tuple(config.config_spectrautils["LAYER_HAS_WEIGHT_TORCH"])):
+                    subplots.append(visualize_weight_ranges_single_layer(module, name))
+
+    # =========================================================
     # 创建一个居中的布局
     layout = column(
         subplots,
@@ -890,94 +793,82 @@ def visualize_onnx_weight_ranges(
     )
 
     plotting.save(layout)
-    print(f"Visualization saved to: {file_path}")
+    print_utils.print_colored_box(f"Visualization saved to: {file_path}")
+    # =========================================================
+    
     return subplots
-    # ===================================
-
-
-
-def visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(
-        weights: OrderedDict,
-        results_dir: str,
-        num_processes: int=16,
-        selected_layers: List = None,
-) -> List[plotting.figure]:
-    """
-    For each of the selected layers, publishes a line plot showing  weight ranges for each layer, summary statistics
-    for relative weight ranges, and a histogram showing weight ranges of output channels
-    with respect to the minimum weight range.
-
-    :param model: pytorch model
-    :param results_dir: Directory to save the Bokeh plots
-    :param selected_layers: a list of layers a user can choose to have visualized. If selected layers is None,
-        all Linear and Conv layers will be visualized.
-    :return: A list of bokeh plots
-    """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f'{timestamp}_visualize_relative_weight_ranges_to_identify_problematic_layers.html'
-    file_path = os.path.join(results_dir, file_name)
-    plotting.output_file(file_path)
-    subplots = []
-    
-    if selected_layers:
-        raise NotImplementedError("Visualization for selected ONNX layers is not implemented yet.")
-    
-    
-    tensor_weights_num = len(weights)
-    
-    # 使用ProcessPoolExecutor进行并行处理
-    with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        futures = [executor.submit(process_layer_data, item) for item in weights.items()]
-        
-        # 使用tqdm显示进度
-        for future in tqdm(futures, total=len(weights), desc="Processing relative range", unit="layer"):
-            name, layer_weights_summary_statistics = future.result()
-            
-            # 在主进程中创建Bokeh图表
-            if tensor_weights_num > 300 :
-                subplot = visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_summary_statistics, name)
-            else:
-                subplot = visualize_relative_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name)
-            subplots.append(subplot)
-    
-    plotting.save(column(subplots, sizing_mode='scale_width', align='center'))
-    return subplots
-
 
 def visualize_relative_weight_ranges_to_identify_problematic_layers(
-        model: torch.nn.Module,
+        model: Union[torch.nn.Module, OrderedDict],
         results_dir: str,
-        selected_layers: List = None
+        num_processes: int = 16,
+        selected_layers: List = None,
+        is_onnx: bool = False
 ) -> List[plotting.figure]:
     """
-    For each of the selected layers, publishes a line plot showing  weight ranges for each layer, summary statistics
-    for relative weight ranges, and a histogram showing weight ranges of output channels
-    with respect to the minimum weight range.
+    Visualizes relative weight ranges for each layer to help identify problematic layers.
+    Creates scatter plots showing the ratio of standard deviation to mean against the ratio of max to min.
 
-    :param model: pytorch model
-    :param results_dir: Directory to save the Bokeh plots
-    :param selected_layers: a list of layers a user can choose to have visualized. If selected layers is None,
-        all Linear and Conv layers will be visualized.
-    :return: A list of bokeh plots
+    Args:
+        model: PyTorch model or OrderedDict of ONNX weights
+        results_dir: Directory to save the Bokeh plots
+        num_processes: Number of processes for parallel processing (ONNX only)
+        selected_layers: List of layer names to visualize. If None, visualizes all layers with weights
+        is_onnx: Boolean flag to indicate if input is an ONNX model
+
+    Returns:
+        List of Bokeh plots
     """
-
-    file_path = os.path.join(results_dir, 'visualize_relative_weight_ranges_to_identify_problematic_layers.html')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f'{timestamp}_visualize_{"onnx" if is_onnx else "pytorch"}_relative_weight_ranges.html'
+    file_path = os.path.join(results_dir, file_name)
     plotting.output_file(file_path)
-    subplots = []
-    # layer name -> module weights data frame mapping
-    if not selected_layers:
-        for name, module in model.named_modules():
-            if hasattr(module, "weight") and \
-                isinstance(module, (torch.nn.modules.conv.Conv2d, torch.nn.modules.linear.Linear)):
-                subplots.append(visualize_relative_weight_ranges_single_layer(module, name))
-    else:
-        for name, module in model.named_modules():
-            if hasattr(module, "weight") and \
-                    isinstance(module, (torch.nn.modules.conv.Conv2d, torch.nn.modules.linear.Linear)) and \
-                    name in selected_layers:
-                subplots.append(visualize_relative_weight_ranges_single_layer(module, name))
 
-    plotting.save(column(subplots))
+    subplots = []
+    
+    if is_onnx:
+        weights = model
+        tensor_weights_num = len(weights)
+        if selected_layers:
+            raise NotImplementedError("Visualization for selected ONNX layers is not implemented yet.")
+        
+        # 使用ProcessPoolExecutor进行并行处理
+        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+            futures = [executor.submit(process_layer_data, item) for item in weights.items()]
+            
+            # 使用tqdm显示进度
+            for future in tqdm(futures, total=len(weights), desc="Processing relative range", unit="layer"):
+                name, layer_weights_summary_statistics = future.result()
+                
+                # 在主进程中创建Bokeh图表
+                if tensor_weights_num > 300 :
+                    subplot = visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_summary_statistics, name)
+                else:
+                    subplot = visualize_relative_onnx_weight_ranges_single_layer(layer_weights_summary_statistics, name)
+                subplots.append(subplot)
+        # plotting.save(column(subplots, sizing_mode='scale_width', align='center'))
+    else:
+        if not selected_layers:
+            for name, module in model.named_modules():
+                if hasattr(module, "weight") and \
+                    isinstance(module, (torch.nn.modules.conv.Conv2d, torch.nn.modules.linear.Linear)):
+                    subplots.append(visualize_relative_weight_ranges_single_layer(module, name))
+        else:
+            for name, module in model.named_modules():
+                if hasattr(module, "weight") and \
+                        isinstance(module, (torch.nn.modules.conv.Conv2d, torch.nn.modules.linear.Linear)) and \
+                        name in selected_layers:
+                    subplots.append(visualize_relative_weight_ranges_single_layer(module, name))
+
+    # Create centered layout
+    layout = column(
+        subplots,
+        sizing_mode='stretch_width',
+        styles={'margin': '0 auto', 'max-width': '1600px'}
+    )
+
+    plotting.save(layout)
+    print(f"Visualization saved to: {file_path}")
     return subplots
 
 
@@ -1009,60 +900,19 @@ def visualize_torch_model_weights(model: torch.nn.Module , model_name: str, resu
     # Visualize weight ranges for all layers
     visualize_weight_ranges(
         model=model,
-        results_dir=results_dir
+        results_dir=results_dir,
+        is_onnx=False
     )
     print("Generating relative weight range visualizations...")
     
     # Visualize relative weight ranges to identify potential problematic layers
     visualize_relative_weight_ranges_to_identify_problematic_layers(
         model=model,
-        results_dir=results_dir
+        results_dir=results_dir,
+        is_onnx=False
     )
     
     print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
-
-
-def get_onnx_model_weights(onnx_path: str) -> Dict[str, np.ndarray]:
-    """
-    get_onnx_model_weights 
-    Extract weights from an ONNX model.
-    
-    :param onnx_path: Path to the ONNX model file
-    :return: Dictionary of weight names and their corresponding numpy arrays
-    """
-    model = onnx.load(onnx_path)
-    
-    # 验证模型有效性
-    onnx.checker.check_model(model)  
-    
-    # 创建一个字典来存储所有初始化器
-    initializers = {i.name: i for i in model.graph.initializer}
-    
-    weights = OrderedDict()
-    weight_tensor = OrderedDict()
-    need_transpose = []   
-    
-    # 然后补充处理通过节点获取的权重
-    for node in model.graph.node:
-        if node.op_type in config.config_spectrautils["LAYER_HAS_WEIGHT_ONNX"]:
-            if len(node.input) > 1:
-                
-                # 从 这里只选择 第2个输入，也就是权重，bias不考虑 
-                for in_tensor_name in node.input[1:2]: 
-                    weight_tensor[in_tensor_name] = onnx.numpy_helper.to_array(initializers[in_tensor_name])
-                if node.op_type == 'ConvTranspose':
-                    need_transpose.append(in_tensor_name)
-                        
-    
-    # 合并权重并处理需要转置的情况
-    for name, tensor in weight_tensor.items():
-        if len(tensor.shape) >= 1:
-            if name in need_transpose:
-                tensor = tensor.transpose([1, 0, 2, 3])
-            weights[name] = tensor
-        
-    return weights
-
 
 
 def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: str = None):
@@ -1081,7 +931,6 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     # Create results directory if it doesn't exist
     os.makedirs(results_dir, exist_ok=True)
     
-    # Load ONNX model weights
     try:
         weights = get_onnx_model_weights(onnx_path)
     except Exception as e:
@@ -1092,18 +941,17 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     print_utils.print_colored_box(f"Found {len(weights)} weight tensors")
     
     # 只可视化权重
-    # visualize_onnx_weight_ranges(weights, results_dir)
+    visualize_weight_ranges(weights, results_dir, is_onnx=True)
     
     # 可视化权重和有问题的输出
-    visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(weights, results_dir)
+    visualize_relative_weight_ranges_to_identify_problematic_layers(weights, results_dir, is_onnx=True)
     
     print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
 
-
+    
 if __name__ == "__main__":
     # onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
     onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
-    # input_name, output_name = get_onnx_model_io_info(onnx_path)
     
     # Example usage with different models
     model_old = torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
@@ -1112,7 +960,6 @@ if __name__ == "__main__":
     model_new = torch.load('/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet_model_cle_bc.pt')
 
     # model_new = torchvision.models.resnet18(pretrained=False)
-    # model_new.load_state_dict(torch.load('/mnt/share_disk/bruce_trie/workspace/Quantizer-Tools/resnet_model_cle_bc.pt'))
 
     
     # visualize_torch_model_weights(model_new, "resnet18_new")
@@ -1121,7 +968,7 @@ if __name__ == "__main__":
     visualize_onnx_model_weights(onnx_path, "od_bev")
     
     
+    
     # export_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
     # model_export_onnx(model_old, export_path)
-    
     
