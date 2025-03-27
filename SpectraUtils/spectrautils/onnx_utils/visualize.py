@@ -20,8 +20,10 @@ import matplotlib.pyplot as plt
 import io
 import base64
 
+from bokeh.embed import file_html
+from bokeh.resources import CDN
 from bokeh import plotting
-from bokeh.layouts import row, column, Spacer
+from bokeh.layouts import row, column, Spacer, gridplot
 from bokeh.plotting import figure
 from bokeh.models import Div
 from bokeh.models import DataTable, TableColumn, CustomJS, Div
@@ -598,7 +600,8 @@ def visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_data_
     p = figure(title=f"Weight Ranges per Output Channel: {layer_name}", 
                x_axis_label="Output Channels", 
                y_axis_label="Summary Statistics",
-               width=900, height=500,
+               width=900, 
+               height=500,
                tools="")  # Empty string means no tools
 
     p.line('index', 'min', line_color='#2171b5', line_width=2, legend_label="Min", source=source)
@@ -622,11 +625,11 @@ def visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_data_
                          line_dash='dashed', line_width=1))
     
     for channel in problematic_output_channels["lower"]:
-        p.add_layout(Span(location=channel, dimension='height', line_color='#531DF0', 
+        p.add_layout(Span(location=channel, dimension='height', line_color='#1322ED', 
                          line_dash='dashed', line_width=1))
         
 
-    # Create histogram
+    # Create histogram 直方图
     hist, edges = np.histogram(output_channel_ranges_data_frame, bins=50)
     hist_df = pd.DataFrame({'count': hist, 'left': edges[:-1], 'right': edges[1:]})
     hist_source = ColumnDataSource(hist_df)
@@ -634,7 +637,7 @@ def visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_data_
     h = figure(title="Relative Ranges For All Output Channels",
                x_axis_label="Weight Range Relative to Smallest Output Channel",
                y_axis_label="Count",
-               width=600, height=500,
+               width=900, height=500,
                tools="")
 
     h.quad(bottom=0, top='count', left='left', right='right', source=hist_source,
@@ -648,36 +651,28 @@ def visualize_relative_onnx_weight_ranges_single_layer_quick(layer_weights_data_
     upper_bound = Q3 + 1.5 * IQR
     lower_bound = Q1 - 1.5 * IQR
 
-    h.add_layout(Span(location=upper_bound, dimension='height', line_color='red',
-                     line_dash='dashed', line_width=1))
-    h.add_layout(Span(location=lower_bound, dimension='height', line_color='blue',
-                     line_dash='dashed', line_width=1))
+    h.add_layout(Span(location=upper_bound, dimension='height', line_color='#F01DA9',
+                     line_dash='dashed', line_width=2))
+    h.add_layout(Span(location=lower_bound, dimension='height', line_color='#1322ED',
+                     line_dash='dashed', line_width=2))
     
     
     # ==============================================
     # 创建一个居中的布局
     layout = row(
         p, h,
-        sizing_mode='scale_width',  # 使布局在水平方向上可缩放
-        styles={'margin': '0 auto', 'max-width': '1600px'}  # 设置最大宽度并居中
+        align="center"  # 使用 align="center" 来确保布局居中
     )
 
     # 使用column包装row，以便应用全局样式
     final_layout = column(
         layout,
         sizing_mode='stretch_width',  # 使布局在水平方向上填充
-        styles={'margin': '0 auto', 'max-width': '1600px'}  # 设置最大宽度并居中
+        align="center",  # 在 column 层级也确保居中
+        styles={'margin': '0 auto', 'max-width': '2600px'}  # 设置最大宽度并居中
     )
     # ==============================================
-
-
-    # Combine plots side by side
-    # layout = row(p, h)
-    
     return final_layout
-
-
-
 
 
 def visualize_changes_after_optimization(
@@ -944,7 +939,7 @@ def visualize_relative_onnx_weight_ranges_to_identify_problematic_layers(
             subplots.append(subplot)
   
 
-    plotting.save(column(subplots))
+    plotting.save(column(subplots, sizing_mode='scale_width', align='center'))
     return subplots
 
 
@@ -1106,7 +1101,7 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
 
 if __name__ == "__main__":
     onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
-    onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
+    # onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
     # input_name, output_name = get_onnx_model_io_info(onnx_path)
     
     # Example usage with different models
@@ -1122,8 +1117,8 @@ if __name__ == "__main__":
     
     # visualize_torch_model_weights(model_new, "resnet18_new")
     # visualize_changes_after_optimization(model_old, model_new, "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils")
-    # visualize_onnx_model_weights(onnx_path, "resnet18")
-    visualize_onnx_model_weights(onnx_path, "od_bev")
+    visualize_onnx_model_weights(onnx_path, "resnet18")
+    # visualize_onnx_model_weights(onnx_path, "od_bev")
     
     
     # export_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
