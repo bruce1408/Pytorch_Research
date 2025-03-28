@@ -24,7 +24,7 @@ from bokeh.models import HoverTool, ColumnDataSource, Span, WheelZoomTool
 from spectrautils import logging_utils, print_utils
 
 
-os.environ["CUDA_VISIBLE_DEVICES"]="2"
+# os.environ["CUDA_VISIBLE_DEVICES"]="2"
 
 class PlotsLayout:
     """
