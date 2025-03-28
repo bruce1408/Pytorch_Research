@@ -1,8 +1,8 @@
 import os
-from unittest.mock import patch, MagicMock
-from spectrautils.onnx_utils import visualize_onnx_model_weights,visualize_torch_model_weights
-import torch, torchvision, onnx
+import torch
 from  torchvision.models import ResNet18_Weights
+from spectrautils.onnx_utils import visualize_onnx_model_weights,visualize_torch_model_weights
+
 
 if __name__ == '__main__':
     
@@ -12,6 +12,6 @@ if __name__ == '__main__':
     visualize_onnx_model_weights(onnx_path, model_name)
     
     # 加载torch模型
-    model_new = torch.load('/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet_model_cle_bc.pt')
+    model_new = torch.load('/share/cdd/onnx_models/resnet_model_cle_bc.pt')
     visualize_torch_model_weights(model_new, "resnet18_new")
     
