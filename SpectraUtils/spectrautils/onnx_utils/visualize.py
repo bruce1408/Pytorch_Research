@@ -588,7 +588,7 @@ def visualize_changes_after_optimization(
     return subplots
 
 
-def visualize_weight_ranges_single_layer(layer, layer_name, use_dynamic, is_onnx=False):
+def visualize_weight_ranges_single_layer(layer, layer_name, use_dynamic=True, is_onnx=False):
     """
     Given a layer, visualizes weight ranges with scatter plots and line plots
     :param layer: layer with weights or layer weights summary statistics for ONNX
@@ -739,7 +739,7 @@ def visualize_weight_ranges(
                 name, layer_weights_summary_statistics = future.result()
                 
                 # 在主进程中创建Bokeh图表
-                subplot = visualize_weight_ranges_single_layer(layer_weights_summary_statistics, name, use_dynamic=use_dynamic,is_onnx=True)
+                subplot = visualize_weight_ranges_single_layer(layer_weights_summary_statistics, name, use_dynamic=use_dynamic, is_onnx=True)
                     
                 subplots.append(subplot)
     else:
@@ -871,8 +871,7 @@ def visualize_torch_model_weights(model: torch.nn.Module , model_name: str, resu
         results_dir=results_dir,
         is_onnx=False
     )
-    print("Generating relative weight range visualizations...")
-    
+        
     # Visualize relative weight ranges to identify potential problematic layers
     visualize_relative_weight_ranges_to_identify_problematic_layers(
         model=model,
