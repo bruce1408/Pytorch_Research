@@ -18,7 +18,7 @@ torch.onnx.export(torch_module, torch.randn((1, 3, 224, 224)), buffer, opset_ver
 onnx_model = onnx.load_from_string(buffer.getvalue())
 buffer.close()
 
-# model_simp, check = simplify(onnx_model)
+model_simp, check = simplify(onnx_model)
 # assert check, "Simplified ONNX model could not be validated"
 output_path = "./resnet18_new_convert.onnx"
 onnx.save(model_simp, output_path)
