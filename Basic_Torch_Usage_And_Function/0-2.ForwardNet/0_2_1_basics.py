@@ -1,16 +1,22 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+# =========================================
+# 这是我们的训练数据，x 和 y 呈线性关系，y = 2x。
+# =========================================
+
+
 x_data = [1.0, 2.0, 3.0]
 y_data = [2.0, 4.0, 6.0]
 
 
-# our model for the forward pass
+# 定义前向传播函数
 def forward(x):
     return x * w
 
 
-# Loss function
+# 定义一个简单的损失函数
 def loss(x, y):
     y_pred = forward(x)
     return (y_pred - y) * (y_pred - y)

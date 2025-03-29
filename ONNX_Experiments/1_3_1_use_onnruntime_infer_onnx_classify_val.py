@@ -79,9 +79,7 @@ def onnxruntime_infer():
             print("the acc is {}".format(correct_count / count))
             
     accuracy = correct_count / count
-    avg_time_per_image = total_time / count
-    print(f'Classification accuracy: {accuracy:.4f}')
-    print(f'Average inference time per image: {avg_time_per_image*1000:.2f} ms')
+    print_colored_box(f'Classification accuracy: {accuracy:.4f}')
     
 
     
@@ -108,25 +106,6 @@ def export_onnx(model, input_shape, export_onnx_path):
         opset_version=11
     )
     print_colored_box("Onnx model has been exported success!")
-
-
-# load onnx and val the data with ort
-def load_onnx_and_eval(test_images, img_labels):
-    sess = onnxruntime.InferenceSession(args.export_path)
-    correct_count = 0
-    total_count = len(test_images)
-    print("begin to eval the model...")
-    for i in tqdm(range(total_count)):
-        input_data = np.expand_dims(test_images[i], axis=0).astype(np.float32)
-        output = sess.run(None, {'img': input_data})[0]
-        predicted_class = np.argmax(output)
-        # predict = img_dict[predicted_class]
-    
-        if predicted_class == img_labels[i]:
-            correct_count += 1
-            
-    accuracy = correct_count / total_count
-    print_colored_box('Classification accuracy:', accuracy)
 
 
 if __name__ == "__main__":
