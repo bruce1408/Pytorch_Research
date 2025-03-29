@@ -77,7 +77,13 @@ y = model(x)
 print(y)
 
 # 导出ONNX模型
-torch.onnx.export(model, x, "model.onnx", input_names=["input"], output_names=["output"], keep_initializers_as_inputs=True)
+torch.onnx.export(
+    model, 
+    x, 
+    "model.onnx", 
+    input_names=["input"],
+    output_names=["output"],
+    keep_initializers_as_inputs=False)
 
 # 加载导出的ONNX模型
 onnx_model = onnx.load("model.onnx")

@@ -5,11 +5,14 @@ import argparse
 from tqdm import tqdm
 import onnxruntime
 import numpy as np
-import PIL
+import PIL,time
+from torchvision.models import ResNet18_Weights
 import torchvision.models as models
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-
+import common.config as config_pytorch
+from spectrautils.print_utils import print_colored_box
+os.environ["CUDA_VISIBLE_DEVICES"]="3,4"
 
 # 1. load config variable and load model from pytorch
 def parse_args():
@@ -17,22 +20,12 @@ def parse_args():
     
     # 模型选择
     parser.add_argument('--model_name', default="resnet18", help='model name resnet-50、mobilenet_v2、efficientnet')
-    
-    # 预处理模型下载地址
-    parser.add_argument('--model_file', default="/root/resnet18-f37072fd.pth", help='laod checkpoints from saved models')
-    
-    # 输入大小
-    parser.add_argument('--input_shape', type=list, nargs='+', default=[1,3,224,224])
-
-    # label 地址
+    parser.add_argument('--torch_path', default="/root/resnet18-f37072fd.pth", help='laod checkpoints from saved models')
+    parser.add_argument('--onnx_path', default="/share/cdd/onnx_models/resnet18_official.onnx", help="pth model convert to onnx name")
+    parser.add_argument('--input_shape', type=list, nargs='+', default=[1, 3, 224, 224])
     parser.add_argument("--label_path", default="/root/val_torch_cls/synset.txt", help="label path")
-    
-    # onnx 输出地址
-    parser.add_argument('--export_path', default="/Users/bruce/Downloads/5223_bev_trans/20230811/vovnet_cla_224.onnx", help="pth model convert to onnx name")
-    
-    # 验证集 地址
-    parser.add_argument('--data_val', default="/Users/bruce/Downloads/Datasets/val", help="val data")
-    
+    parser.add_argument('--data_val', default="/mnt/share_disk/bruce_trie/workspace/outputs/imagenet_dataset/val", help="val data")
+
 
     args = parser.parse_args()
 
@@ -40,7 +33,7 @@ def parse_args():
 
 
 # img preprocessing method
-def pre_process_img(image_path):
+def pre_process_img():
     
     transform = transforms.Compose([
         transforms.Resize(256),
@@ -51,54 +44,70 @@ def pre_process_img(image_path):
             std=[0.229, 0.224, 0.225])
     ])
     
-    img = PIL.Image.open(image_path).convert("RGB")
-    img = transform(img)
-    return img
+    return transform
 
 
 # get the val data and preprocessing 
-def load_label_imgs():
-    print("laoding the data and preprocessing the image data ...")
+def onnxruntime_infer():
+    print_colored_box("loading the data and preprocessing the image data ...")
     
     count = 0 
+    total_time = 0
     correct_count = 0
     dir_name_list = sorted(os.listdir(args.data_val))
-    sess = onnxruntime.InferenceSession(args.export_path)
-    input_name = sess.get_inputs()[0].name
+    
+    providers = ['CUDAExecutionProvider']
 
+    sess = onnxruntime.InferenceSession(args.onnx_path, providers=providers)
+    input_name = sess.get_inputs()[0].name
+    
+    transform = pre_process_img()
+    
     for true_label, dir_ in enumerate(dir_name_list):
         img_dir = os.path.join(args.data_val, dir_)
         for img_name in os.listdir(img_dir):
             count += 1
-            img_data = pre_process_img(os.path.join(img_dir, img_name))
-            input_data = np.expand_dims(img_data, axis=0).astype(np.float32)
-            output = sess.run(None, {input_name: input_data})[0]
+            img_path =os.path.join(img_dir, img_name)
+            img = PIL.Image.open(img_path).convert("RGB")
+            img_data = transform(img).unsqueeze(0).numpy()
+            output = sess.run(None, {input_name: img_data})[0]
             predicted_class = np.argmax(output)
             if predicted_class == true_label:
                 correct_count += 1
-        if count % 100 == 0 :
+        
+        if count % 1000 == 0 :
             print("the acc is {}".format(correct_count / count))
             
     accuracy = correct_count / count
-    print('Classification accuracy:', accuracy)
-
+    avg_time_per_image = total_time / count
+    print(f'Classification accuracy: {accuracy:.4f}')
+    print(f'Average inference time per image: {avg_time_per_image*1000:.2f} ms')
     
 
-
+    
 # get the torch official models 
-def get_model():
-    model = models.__dict__[args.model_name](pretrained=False)
-    state_dict = torch.load(args.model_file)
-    model.load_state_dict(state_dict)
+def get_torch_model():
+    # model = models.__dict__[args.model_name](pretrained=True)
+    model = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+
+    # state_dict = torch.load(args.model_file)
+    # model.load_state_dict(state_dict)
     return model
 
 
 # export .pth model to .onnx
 def export_onnx(model, input_shape, export_onnx_path):
-    model = get_model()
+    model = get_torch_model()
     model.eval()
-    torch.onnx.export(model, torch.randn(input_shape), export_onnx_path, input_names=["input"], output_names=["output"], opset_version=11)
-    print("onnx model has been transformed!")
+    torch.onnx.export(
+        model, 
+        torch.randn(input_shape),
+        export_onnx_path, 
+        input_names=["input"], 
+        output_names=["output"], 
+        opset_version=11
+    )
+    print_colored_box("Onnx model has been exported success!")
 
 
 # load onnx and val the data with ort
@@ -117,25 +126,18 @@ def load_onnx_and_eval(test_images, img_labels):
             correct_count += 1
             
     accuracy = correct_count / total_count
-    print('Classification accuracy:', accuracy)
+    print_colored_box('Classification accuracy:', accuracy)
 
 
 if __name__ == "__main__":
     args = parse_args()
     
-    # 1. 加载数据
-    load_label_imgs()
-    # print(image_datas)
-    # print(img_labels)
+    #  onnxruntime 推理
+    onnxruntime_infer()
     
+    #  加载torch模型
+    model = get_torch_model()
     
-    # 2. 加载模型
-    # model = get_model()
+    #  导出onnx模型
+    export_onnx(model, args.input_shape, args.onnx_path)
     
-    # 3. 导出onnx模型
-    # export_onnx(model, args.input_shape, args.export_path)
-    
-    # 4. 用ort进行推理验证
-    # load_onnx_and_eval(image_datas, img_labels)
-    
-   

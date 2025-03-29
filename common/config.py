@@ -5,11 +5,16 @@ import torch
 dogs_cats_dataset_path = '/mnt/share_disk/bruce_trie/misc_data_products/dogs_cats'
 
 
+imagenet_data_path = "/mnt/share_disk/bruce_trie/workspace/outputs/imagenet_dataset"
+
+
 config_operator = {
     "save_dir" : "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/ONNX_Operator_Vis/output_onnx"
 }
 
-
+config_onnx_inference = {
+    
+}
 
 config_spectrautils = {
     "LAYER_HAS_WEIGHT_ONNX" : ['Conv', 'Gemm', 'ConvTranspose', 'PRelu', 'BatchNormalization'],
