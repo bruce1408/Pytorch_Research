@@ -30,7 +30,3 @@ print("img2 = ", img2)  # 转化为PILImage并显示
 img_2 = transforms.ToPILImage()(img2).convert('RGB')
 print("img_2 = ", img_2)
 # img_2.show()
-
-import os
-print(os.path.dirname(__file__))
-print(os.path.abspath(os.path.join(os.getcwd(), "../../")))

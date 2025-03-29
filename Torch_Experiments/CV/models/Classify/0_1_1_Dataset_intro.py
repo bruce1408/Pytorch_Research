@@ -20,20 +20,18 @@ loader = Data.DataLoader(
     shuffle=False,
     num_workers=2,
 )
+
+print("打印 DataLoader 中的数据:")
+for batch_idx, (batch_x, batch_y) in enumerate(loader):
+    print(f"Batch {batch_idx + 1}:")
+    print(f"  X: {batch_x}")
+    print(f"  Y: {batch_y}")
+    print()
+    
 print(loader)
 loader = iter(loader)
 input_var = next(loader)[0]
-print("next: ", input_var)
+print("next: \n", input_var)
 print(next(loader))
-input_var = input_var.to(torch.float32)[:1]
-print(input_var)
-# def show_batch():
-#     for epoch in range(3):
-#         for step, (batch_x, batch_y) in enumerate(loader):
-#             # training
-#
-#             print("steop:{}, batch_x:{}, batch_y:{}".format(step, batch_x, batch_y))
-#
-#
-# if __name__ == '__main__':
-#     show_batch()
+
+

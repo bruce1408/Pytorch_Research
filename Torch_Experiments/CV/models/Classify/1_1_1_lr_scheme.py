@@ -30,7 +30,6 @@ def train_model(lr_policy):
         x = model(torch.randn(3, 3, 64, 64))
         loss = x.sum()
         loss.backward()
-        # print((optimizer.param_groups))
         lrs.append((i, optimizer.param_groups[0]['lr']))
         optimizer.step()
         lr_policy.step()
