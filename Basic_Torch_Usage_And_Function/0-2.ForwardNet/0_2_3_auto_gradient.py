@@ -1,6 +1,15 @@
 import torch
 from torch.autograd import Variable
 import torch.optim as optim
+from spectrautils import logging_utils
+from spectrautils import print_utils
+logger_manager = logging_utils.AsyncLoggerManager(work_dir='./torch_basic_logs')
+logger = logger_manager.logger
+
+# =========================================
+# 这是我们的训练数据，x 和 y 呈线性关系，y = 2x。
+# =========================================
+
 
 x_data = [1.0, 2.0, 3.0]
 y_data = [2.0, 4.0, 6.0]
@@ -27,20 +36,21 @@ def loss(x, y):
 print("predict (before training)", 4, forward(4).data)
 
 # Training loop
-for epoch in range(1000):
+for epoch in range(20):
     for x_val, y_val in zip(x_data, y_data):
         # 求损失函数
         l = loss(x_val, y_val)
-        # 可以自动求梯度
+        
+        # 方向传播自动求梯度
         l.backward()
-        print("grad: ", x_val, y_val, w.grad.data)
+        
+        # logger.info("x_val is%f," x_val, y_val, w.grad.data)
+        logger.info("grad: x_val=%.2f, y_val=%.2f, w.grad=%.2f, w is %.2f", x_val, y_val, w.grad.data.item(), w.item())
+        
         # 参数更新
         w.data = w.data - 0.01 * w.grad.data
 
         # 每次参数更新之后梯度值清零
         w.grad.data.zero_()
-        print("the w is: ", w)
-
-    # print("progress:", epoch, l.Dataset)
 
 print("predict (after training)", 4, forward(4).data)
