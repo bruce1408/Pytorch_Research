@@ -131,13 +131,12 @@ def load_onnx_and_eval(test_images, img_labels):
 
 if __name__ == "__main__":
     args = parse_args()
-    
-    #  onnxruntime 推理
-    onnxruntime_infer()
-    
+     
     #  加载torch模型
     model = get_torch_model()
     
     #  导出onnx模型
-    export_onnx(model, args.input_shape, args.onnx_path)
+    # export_onnx(model, args.input_shape, args.onnx_path)
     
+     #  onnxruntime 推理
+    onnxruntime_infer()
