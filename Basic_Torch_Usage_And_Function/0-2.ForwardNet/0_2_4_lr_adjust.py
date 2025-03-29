@@ -1,6 +1,11 @@
 import torch
 import math
 import torch.optim as optim
+from spectrautils import logging_utils
+
+logger_manager = logging_utils.AsyncLoggerManager(work_dir='./torch_basic_logs')
+logger = logger_manager.logger
+
 """
 参考文献
 https://blog.zhujian.life/posts/78a36c78.html
@@ -26,14 +31,13 @@ def mannual_lr():
 
     for epoch in range(40):
         optimizer.step()
-        print('epoch:{}, {}'.format(epoch, lrr.get_last_lr()[0]))
+        logger.info('epoch:{}, {}'.format(epoch, lrr.get_last_lr()[0]))
         lrr.step()
         scheduler.step()
 
 
 def find_lr(data_loader, model, criterion, optimizer, device, init_value=1e-8, final_value=10., beta=0.98):
     """
-
     :param data_loader:
     :param model:
     :param criterion:
@@ -55,7 +59,7 @@ def find_lr(data_loader, model, criterion, optimizer, device, init_value=1e-8, f
     log_lrs = []
     for inputs, labels in data_loader:
         batch_num += 1
-        print('{}: {}'.format(batch_num, lr))
+        logger.info('{}: {}'.format(batch_num, lr))
 
         # As before, get the loss for this mini-batch of inputs/outputs
         inputs = inputs.to(device)

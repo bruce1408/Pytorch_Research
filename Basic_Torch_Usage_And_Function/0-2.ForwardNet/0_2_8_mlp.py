@@ -6,10 +6,13 @@ from torch.nn import functional as F
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, num_class):
         super(MLP, self).__init__()
+        
         # 线性变换：输入层->隐含层
         self.linear1 = nn.Linear(input_dim, hidden_dim)
+        
         # 使用ReLU激活函数
         self.activate = F.relu
+        
         # 线性变换：隐含层->输出层
         self.linear2 = nn.Linear(hidden_dim, num_class)
 
