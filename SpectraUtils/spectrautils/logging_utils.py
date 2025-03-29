@@ -40,7 +40,7 @@ class AsyncLoggerManager:
             cls._instance.init_logger(*args, **kwargs)
         return cls._instance
 
-    def init_logger(self, work_dir=None, log_file=None, level=logging.INFO):
+    def init_logger(self, work_dir=None, log_file=None, level=logging.INFO, name_prefix=None):
         """初始化日志记录器"""
         if not hasattr(self, "initialized"):
             self.logger = logging.getLogger()
@@ -56,6 +56,8 @@ class AsyncLoggerManager:
             if log_file is None:
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 log_file = f"{timestamp}.log"
+                if name_prefix:
+                    log_file = f"{name_prefix}_{log_file}"
                 if work_dir is not None:
                     os.makedirs(work_dir, exist_ok=True)
                     log_file = os.path.join(work_dir, log_file)
