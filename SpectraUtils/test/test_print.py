@@ -14,10 +14,11 @@ import sys
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
-from printk.printk import print_colored_box, print_colored_box_line
+from  spectrautils.print_utils import print_colored_box, print_colored_box_line
 print_colored_box("hello world", 60, text_color='green', box_color='yellow', align='center')
 print_colored_box("请在此脚本目录运行该脚本", align='center')
-print_colored_box_line("警告", "请立即检查系统！", attrs=['bold'], text_color='red', box_color='yellow', box_width=50)
+print_colored_box_line("警告", "请立即检查系统！ 按照如下顺序 \n1. clone the code \n2. debug the code \n3. run the cocde ", 
+                       attrs=['bold'], text_color='red', box_color='yellow', box_width=50)
 
 
 onnx_name = ["1.onnx", "2.onnx", "3.onnx", "4.onnx", "5.onnx", "6.onnx", "7.onnx", "8.onnx", "9.onnx", "10.onnx"]
@@ -35,9 +36,9 @@ try:
     
     if dist.is_initialized():
         if dist.get_rank() == 0:
-            print_colored_box("在分布式环境中：Epoch {} 已完成！".format(idx + 1))
+            print_colored_box("在分布式环境中: Epoch {} 已完成！".format(idx + 1))
     else:
-        print_colored_box("不在分布式环境中：Epoch {} 已完成！".format(idx + 1))
+        print_colored_box("不在分布式环境中: Epoch {} 已完成！".format(idx + 1))
 except Exception as e:
-    print_colored_box("发生异常：{}".format(str(e)))
-    print_colored_box("在非分布式环境中：Epoch {} 已完成！".format(idx + 1))
+    print_colored_box("发生异常: {}".format(str(e)))
+    print_colored_box("在非分布式环境中: Epoch {} 已完成！".format(idx + 1))
