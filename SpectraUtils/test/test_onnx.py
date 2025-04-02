@@ -2,6 +2,7 @@ import os
 import torch
 from  torchvision.models import ResNet18_Weights
 from spectrautils.onnx_utils import visualize_onnx_model_weights,visualize_torch_model_weights
+from spectrautils.onnx_utils import export_model_onnx
 
 
 if __name__ == '__main__':

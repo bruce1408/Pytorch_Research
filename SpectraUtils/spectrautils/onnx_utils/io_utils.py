@@ -1,6 +1,8 @@
 import onnx, torch
 import onnxruntime as ort
 from collections import OrderedDict
+from typing import Dict, Union, List
+import torchvision.models as models
 
 
 def get_onnx_model_input_output_info(onnx_path:str)->OrderedDict:
@@ -39,24 +41,72 @@ def get_onnx_model_input_output_info(onnx_path:str)->OrderedDict:
     return input_info, output_info
 
 
-def export_model_onnx():
-    dummy_input = torch.randn(1, 3, 224, 224)
+def export_model_onnx(
+    model:torch.nn.Module, 
+    input_info: Dict[str, Union[tuple, torch.Size]], 
+    export_path: str, 
+    output_names: List[str],
+    opset_version=13
+):
+    
+    """
+    将PyTorch模型导出为ONNX格式,支持多个输入和输出
+
+    Args:
+        model (nn.Module): 要导出的PyTorch模型
+        input_info (Dict[str, Union[tuple, torch.Size]]): 输入名称到形状的映射
+        path (str): 保存ONNX模型的路径
+        output_names (List[str]): 输出节点的名称列表
+        dynamic_axes (Dict[str, Dict[int, str]], optional): 动态轴的配置
+        opset_version (int, optional): ONNX操作集版本,默认为11
+        export_params (bool, optional): 是否导出模型参数,默认为True
+        validate (bool, optional): 是否验证导出的ONNX模型,默认为True
+
+    Returns:
+        None
+
+    Example:
+        >>> model = YourMultiInputOutputModel()
+        >>> export_model_onnx(model, 
+        ...                   {'input1': (1, 3, 224, 224), 'input2': (1, 1, 28, 28)}, 
+        ...                   "multi_io_model.onnx",
+        ...                   output_names=['output1', 'output2'])
+    """
+    
+    
+    dummy_inputs = {name: torch.randn(*shape) for name, shape in input_info.items()}
+
+    # 确保模型处于评估模式
+    model.eval()
+    
     
     # 导出模型到ONNX
-    export_onnx_str = """
-        torch.onnx.export(
-            model,                    # 要导出的模型
-            dummy_input,              # 模型的输入
-            path,                     # 保存ONNX模型的路径
-            export_params=True,       # 存储训练好的参数权重
-            opset_version=11,         # ONNX版本
-            do_constant_folding=True, # 是否执行常量折叠优化
-            input_names=['input'],    # 输入节点的名称
-            output_names=['output'],  # 输出节点的名称
-        )
-    """
-    print(export_onnx_str)
+    torch.onnx.export(
+        model,                    
+        tuple(dummy_inputs.values()),      
+        export_path,                     
+        opset_version=opset_version,
+        do_constant_folding=True, 
+        input_names=list(input_info.keys()),  
+        output_names=output_names,
+        verbose=False
+    )
+    
+    print("onnx model export to: ", export_path)
     
     
 if __name__ == "__main__":
-    export_model_onnx()
+    
+    # 加载预训练的ResNet18模型
+    model = models.resnet18(pretrained=True)
+    
+    # 定义输入信息
+    input_info = {'input': (1, 3, 224, 224)}  # ResNet18 期望的输入尺寸
+    
+    # 定义输出名称
+    output_names = ['output']
+    export_model_onnx(model, 
+                      input_info,
+                      "./resnet18.onnx",
+                      output_names
+                    )
