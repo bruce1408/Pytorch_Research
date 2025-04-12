@@ -94,7 +94,48 @@ def export_model_onnx(
     
     print("onnx model export to: ", export_path)
     
+
+import hashlib
+import os
+
+def show_file_md5(file_path):
+    """
+    计算并显示指定文件的MD5值
     
+    Args:
+        file_path (str): 文件的路径
+    
+    Returns:
+        str: 文件的MD5值，如果文件不存在则返回None
+    """
+    # 检查文件是否存在
+    if not os.path.exists(file_path):
+        print(f"错误: 文件 '{file_path}' 不存在。")
+        return None
+    
+    # 初始化MD5对象
+    md5_hash = hashlib.md5()
+    
+    try:
+        # 以二进制模式打开文件
+        with open(file_path, "rb") as f:
+            # 逐块读取文件内容并更新MD5值
+            for chunk in iter(lambda: f.read(4096), b""):
+                md5_hash.update(chunk)
+        
+        # 获取MD5值的十六进制表示
+        md5_value = md5_hash.hexdigest()
+        
+        # print(f"文件 '{file_path}' 的MD5值是: \n{md5_value}")
+        print(f"The MD5 value of file '{file_path}' is: \n{md5_value}")
+
+        return md5_value
+    
+    except IOError as e:
+        print(f"错误: 无法读取文件 '{file_path}'. {str(e)}")
+        return None
+
+
 if __name__ == "__main__":
     
     # 加载预训练的ResNet18模型
@@ -105,8 +146,10 @@ if __name__ == "__main__":
     
     # 定义输出名称
     output_names = ['output']
-    export_model_onnx(model, 
-                      input_info,
-                      "./resnet18.onnx",
-                      output_names
-                    )
+    # export_model_onnx(model, 
+    #                   input_info,
+    #                   "./resnet18.onnx",
+    #                   output_names
+    #                 )
+    
+    show_file_md5("/mnt/share_disk/bruce_trie/workspace/outputs/parking_space_models/psd_v2_1_2_simplifier.onnx")
