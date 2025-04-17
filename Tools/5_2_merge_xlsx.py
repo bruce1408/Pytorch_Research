@@ -20,14 +20,15 @@ except ImportError:
     print("pip install openpyxl")
 
 # 设置要读取的Excel文件所在的目录和输出文件路径
-excel_dir = "/home/bruce_ultra/workspace/excel_file_merge"
+excel_dir = "/mnt/share_disk/bruce_trie/workspace/outputs/psd_validation_mobius_results/label_results"
 output_file = "./merge_multi_file.xlsx"
+
 
 # 定义要筛选的列名关键词
 target_keywords = ["实验版本", "对照版本"]
 
 # 定义基础表中要保留的额外列
-additional_columns = ["指标名", "样本量", "障碍物类型"]
+additional_columns = ["指标名", "车位类型", "距离范围", "车位状态", "样本量"]
 
 # 获取目录中所有的Excel文件
 excel_files = glob.glob(os.path.join(excel_dir, "*.xls")) + glob.glob(os.path.join(excel_dir, "*.xlsx"))
@@ -46,7 +47,7 @@ all_labels_sets = []
 # 读取所有文件的label列
 for file in excel_files:
     try:
-        print(f"读取文件 {os.path.basename(file)} 的label列")
+        # print(f"读取文件 {os.path.basename(file)} 的label列")
         
         # 尝试使用适当的引擎读取文件
         try:
@@ -88,13 +89,14 @@ if not common_labels:
     print("没有找到共同的label值，无法合并文件")
     sys.exit(1)
 
+
 # 读取第一个文件作为基础表
 print(f"使用 {os.path.basename(excel_files[0])} 作为基础表")
 try:
     # 尝试使用xlrd引擎
     df_base_full = pd.read_excel(excel_files[0], engine='xlrd')
 except Exception as e:
-    print(f"使用xlrd引擎读取失败: {str(e)}")
+    # print(f"使用xlrd引擎读取失败: {str(e)}")
     try:
         # 尝试使用openpyxl引擎
         df_base_full = pd.read_excel(excel_files[0], engine='openpyxl')
@@ -113,26 +115,51 @@ for col in additional_columns:
     else:
         print(f"警告：基础表中没有找到列 '{col}'")
 
-# 添加包含关键词的列
-for col in df_base_full.columns:
-    if col not in base_columns and any(keyword in col for keyword in target_keywords):
-        base_columns.append(col)
+# 获取基础表文件名（不包含扩展名）
+base_file_name = os.path.splitext(os.path.basename(excel_files[0]))[0]
 
+
+# # 添加包含关键词的列
+# for col in df_base_full.columns:
+#     if col not in base_columns and any(keyword in col for keyword in target_keywords):
+#         base_columns.append(col)
+
+# 添加包含关键词的列并重命名实验版本列
+columns_to_rename = {}
+for col in df_base_full.columns:
+    if col not in base_columns:
+        if "实验版本" in col:
+            # 将实验版本列重命名为"文件名+实验版本"
+            new_col_name = f"{base_file_name}_{col}"
+            columns_to_rename[col] = new_col_name
+            base_columns.append(col)
+        elif any(keyword in col for keyword in target_keywords):
+            base_columns.append(col)
+            
 # 如果没有找到匹配的列，提示用户
-if len(base_columns) <= 1 + len([col for col in additional_columns if col in df_base_full.columns]):
-    # 只有label列和额外指定的列
-    print(f"警告：在基础表中没有找到包含关键词 {target_keywords} 的列！")
+# if len(base_columns) <= 1 + len([col for col in additional_columns if col in df_base_full.columns]):
+#     # 只有label列和额外指定的列
+#     print(f"警告：在基础表中没有找到包含关键词 {target_keywords} 的列！")
 
 # 创建只包含目标列的基础表，并只保留共同的label值
 df_base = df_base_full[base_columns].copy()
 df_base = df_base[df_base['label'].isin(common_labels)]
+
+# 重命名实验版本列
+if columns_to_rename:
+    df_base = df_base.rename(columns=columns_to_rename)
+    print(f"基础表中的实验版本列已重命名：{columns_to_rename}")
+    
 print(f"基础表筛选后的列: {base_columns}")
 print(f"基础表筛选后的行数: {len(df_base)}")
+
+
+target_keywords = ["实验版本"]
 
 # 依次合并其他文件
 for file in excel_files[1:]:
     try:
-        print(f"正在合并: {os.path.basename(file)}")
+        # print(f"正在合并: {os.path.basename(file)}")
         
         # 尝试使用适当的引擎读取文件
         try:
@@ -149,36 +176,61 @@ for file in excel_files[1:]:
         
         # 筛选当前文件中包含关键词的列和label列
         current_columns = ['label']  # 始终保留label列
-        for col in df_current_full.columns:
-            if any(keyword in col for keyword in target_keywords):
-                current_columns.append(col)
+        exp_version_cols = [col for col in df_current_full.columns if "实验版本" in col]
         
-        # 如果没有找到匹配的列，跳过此文件
-        if len(current_columns) <= 1:  # 只有label列
-            print(f"  跳过此文件：没有找到包含关键词 {target_keywords} 的列")
+        if not exp_version_cols:
+            print(f"  跳过此文件：没有找到包含'实验版本'的列")
             continue
+        
+        current_columns.extend(exp_version_cols)
         
         # 创建只包含目标列的当前表，并只保留共同的label值
         df_current = df_current_full[current_columns].copy()
         df_current = df_current[df_current['label'].isin(common_labels)]
-        print(f"  当前文件筛选后的列: {current_columns}")
-        print(f"  当前文件筛选后的行数: {len(df_current)}")
+        # print(f"  当前文件筛选后的列: {current_columns}")
+        # print(f"  当前文件筛选后的行数: {len(df_current)}")
         
-        # 找出在两个表中重复的列（除了合并键'label'）
-        common_cols = set(df_base.columns) & set(df_current.columns)
-        if 'label' in common_cols:
-            common_cols.remove('label')
-        
-        # 如果存在重复列，对df_current中的重复列进行重命名
-        if common_cols:
-            # 使用文件名（去掉扩展名）作为后缀
-            file_suffix = os.path.splitext(os.path.basename(file))[0]
-            rename_dict = {col: f"{col}_{file_suffix}" for col in common_cols}
-            df_current = df_current.rename(columns=rename_dict)
+        # 重命名实验版本列，添加文件名作为后缀
+        file_suffix = os.path.splitext(os.path.basename(file))[0]
+        rename_dict = {col: f"{col}_{file_suffix}" for col in exp_version_cols}
+        df_current = df_current.rename(columns=rename_dict)
         
         # 按'label'列进行内连接合并，确保只保留共同的label值
         df_base = pd.merge(df_base, df_current, on='label', how='inner')
         print(f"  合并后，列数: {len(df_base.columns)}, 行数: {len(df_base)}")
+        
+    
+        
+        # for col in df_current_full.columns:
+        #     if any(keyword in col for keyword in target_keywords):
+        #         current_columns.append(col)
+        
+        # # 如果没有找到匹配的列，跳过此文件
+        # if len(current_columns) <= 1:  # 只有label列
+        #     print(f"  跳过此文件：没有找到包含关键词 {target_keywords} 的列")
+        #     continue
+        
+        # # 创建只包含目标列的当前表，并只保留共同的label值
+        # df_current = df_current_full[current_columns].copy()
+        # df_current = df_current[df_current['label'].isin(common_labels)]
+        # print(f"  当前文件筛选后的列: {current_columns}")
+        # print(f"  当前文件筛选后的行数: {len(df_current)}")
+        
+        # # 找出在两个表中重复的列（除了合并键'label'）
+        # common_cols = set(df_base.columns) & set(df_current.columns)
+        # if 'label' in common_cols:
+        #     common_cols.remove('label')
+        
+        # # 如果存在重复列，对df_current中的重复列进行重命名
+        # if common_cols:
+        #     # 使用文件名（去掉扩展名）作为后缀
+        #     file_suffix = os.path.splitext(os.path.basename(file))[0]
+        #     rename_dict = {col: f"{col}_{file_suffix}" for col in common_cols}
+        #     df_current = df_current.rename(columns=rename_dict)
+        
+        # # 按'label'列进行内连接合并，确保只保留共同的label值
+        # df_base = pd.merge(df_base, df_current, on='label', how='inner')
+        # print(f"  合并后，列数: {len(df_base.columns)}, 行数: {len(df_base)}")
         
     except Exception as e:
         print(f"合并文件 {os.path.basename(file)} 时出错: {str(e)}")
