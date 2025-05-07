@@ -1,22 +1,50 @@
 # ——————————————————————————————————————————————
 # 1. Registry: 管理可插拔组件
+# 功能：管理可插拔组件，提供注册和构建功能
 # ——————————————————————————————————————————————
 class Registry:
     def __init__(self, name):
+        """
+        初始化注册表
+        :param name: 注册表名称
+        """
+        
         self.name = name
         self._modules = {}
 
     def register(self, cls=None, *, name=None):
+        """
+        注册组件类
+        :param cls: 要注册的类
+        :param name: 自定义注册名称
+        :ret
+        """
         if cls is None:
+            # 支持装饰器语法
             return lambda actual_cls: self.register(actual_cls, name=name)
+        
+        # 确定注册键名
         key = name or cls.__name__
+        
+        # 存储组件类
         self._modules[key] = cls
         return cls
 
     def build(self, cfg):
+        """
+        根据配置构建组件实例
+        :param cfg: 配置字典，必须包含'type'键
+        :return: 组件实例
+        """
+        
         # cfg: {'type': 'ClassName', ...init args...}
+        # 获取组件类
         cls = self._modules[cfg['type']]
+        
+        # 提取构造参数
         args = {k: v for k, v in cfg.items() if k != 'type'}
+        
+        # 创建实例
         return cls(**args)
 
 # 创建一个 DETECTORS 注册表
@@ -28,6 +56,14 @@ DETECTORS = Registry('detectors')
 # 2. build_detector: 从配置动态构建模型
 # ——————————————————————————————————————————————
 def build_detector(cfg, train_cfg=None, test_cfg=None):
+    """
+    构建检测器
+    :param cfg: 基础配置
+    :param train_cfg: 训练配置
+    :param test_cfg: 测试配置
+    :return: 检测器实例
+    """
+    
     # 简单地把 train_cfg/test_cfg 合并到 cfg 中
     full_cfg = cfg.copy()
     if train_cfg:
@@ -35,7 +71,7 @@ def build_detector(cfg, train_cfg=None, test_cfg=None):
     if test_cfg:
         full_cfg['test_cfg'] = test_cfg
     
-    # 调用 Registry
+    # 通过注册表构建检测器
     model = DETECTORS.build(full_cfg)
     return model
 
@@ -46,24 +82,37 @@ def build_detector(cfg, train_cfg=None, test_cfg=None):
 # ——————————————————————————————————————————————
 class Hook:
     """定义所有可钩入的回调接口"""
-    def before_run(self, runner):    pass
-    def after_run(self, runner):     pass
-    def before_epoch(self, runner):  pass
-    def after_epoch(self, runner):   pass
-    def before_iter(self, runner):   pass
-    def after_iter(self, runner):    pass
+    def before_run(self, runner): pass  # 训练开始前
+    def after_run(self, runner): pass   # 训练结束后
+    def before_epoch(self, runner): pass  # 每个epoch开始前
+    def after_epoch(self, runner): pass   # 每个epoch结束后
+    def before_iter(self, runner): pass   # 每次迭代前
+    def after_iter(self, runner): pass    # 每次迭代后
 
 class Runner:
+    """
+    训练运行器，管理训练流程
+    """
     def __init__(self, model, data, max_epochs):
+        """
+        初始化
+        :param model: 模型
+        :param data: 数据
+        :param max_epochs: 最大epoch数
+        """
+        
         self.model = model
         self.data = data            # iterable of samples
         self.max_epochs = max_epochs
         self.hooks = []
 
     def register_hook(self, hook):
+        """注册钩子"""
         self.hooks.append(hook)
 
     def run(self):
+        """执行训练流程"""
+        
         # 训练/推理主循环
         for hook in self.hooks:
             hook.before_run(self)
@@ -99,6 +148,7 @@ class Runner:
 # 1) 自定义 Detector，并注册到 DETECTORS
 @DETECTORS.register()
 class FakeDetector:
+    """模拟检测器类"""
     def __init__(self, backbone, num_classes, train_cfg=None, test_cfg=None):
         self.backbone = backbone
         self.num_classes = num_classes
@@ -117,7 +167,8 @@ class FakeDetector:
 
 # 2) 自定义 Hook，实现简单打印
 class PrintHook(Hook):
-    def before_run(self, runner):
+    # 这里改成了pre_run的话，不会调用这个函数，而是基类hook里面的空的函数
+    def pre_run(self, runner):
         print(">> Start training")
 
     def before_epoch(self, runner):
@@ -135,12 +186,14 @@ class PrintHook(Hook):
 # ===== 示范完整流程 =====
 # ——————————————————————————————————————————————
 if __name__ == "__main__":
+    
     # 配置部分：模拟从 config 文件读到的字典
     model_cfg = {
         'type': 'FakeDetector',
         'backbone': 'ResNet50',
         'num_classes': 80
     }
+    
     train_cfg = {'lr': 0.001}
     test_cfg  = {'score_thr': 0.5}
 
