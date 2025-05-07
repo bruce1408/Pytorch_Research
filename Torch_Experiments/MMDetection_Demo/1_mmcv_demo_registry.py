@@ -3,6 +3,7 @@ from typing import Dict, Any, Type, Optional
 # 定义一个简单的 Registry 类，用于管理模块注册和构建
 class Registry:
     def __init__(self, name: str):
+        
         # 初始化注册器，给它一个名字
         self._name: str = name
         
@@ -12,10 +13,12 @@ class Registry:
     def register_module(self, cls: Type) -> Type:
         """
         通过装饰器将类注册到 _module_dict 中
+        检查类名是否存在，避免重复注册
         """
-        # 获取类的名字
         
+        # 获取类的名字
         name: str = cls.__name__
+        
         # 检查是否已经注册过同名的类
         if name in self._module_dict:
             raise KeyError(f"{name} 已经在 {self._name} 中注册过了")
@@ -34,6 +37,7 @@ class Registry:
 
     def build(self, cfg: Dict[str, Any]) -> Any:
         """
+        这个 build 其实就是实例化这个类的作用
         根据配置字典构建对象
         配置字典要求至少包含一个 'type' 字段，用于指定构建的类名，
         其他键值作为参数传递给类的构造函数。
@@ -81,6 +85,7 @@ class ModelB:
 
 # 演示如何使用注册器来构建对象
 if __name__ == "__main__":
+    
     # 通过配置字典构建 ModelA 的实例
     cfg_a: Dict[str, Any] = {"type": "ModelA", "param1": 2, "param2": 3}
     model_a: ModelA = MODELS.build(cfg_a)
