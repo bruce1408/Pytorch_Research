@@ -4,7 +4,7 @@ from typing import Dict, Any, Type, Optional
 class Registry:
     def __init__(self, name: str):
         
-        # 初始化注册器，给它一个名字
+        # 给注册器类一个名字
         self._name: str = name
         
         # 创建一个空字典用于存储注册的模块
