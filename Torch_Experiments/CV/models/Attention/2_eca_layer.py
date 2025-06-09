@@ -59,7 +59,7 @@ if __name__ == '__main__':
     print("--- ECA Layer Analysis ---")
     print("Input:", input_tensor.shape)
 
-    # 平均池化
+    # 全局平均池化
     avg_pool_output = eca.avg_pool(input_tensor)
     print("AvgPool Output:", avg_pool_output.shape)
 
