@@ -36,7 +36,7 @@ class MyOptim:
     def zero_grad(self): self.optim.zero_grad()
 
 # 3. 动态从 cfg 构建
-cfg = dict(type='MyOptim', params=[1,2,3], lr=0.1)
+cfg = dict(type='MyOptim', params=[1, 2, 3], lr=0.1)
 optim = OPTIMS.build(cfg)
 print(type(optim))   # <class 'demo_registry.MyOptim'>
 ```
@@ -120,6 +120,7 @@ from mmdet.datasets import build_dataset
 class LossLogger(Hook):
     def __init__(self, interval=100):
         self.interval = interval
+        
     def after_train_iter(self, runner):
         loss = runner.log_buffer.output.get('loss')
         if runner.iter % self.interval == 0:

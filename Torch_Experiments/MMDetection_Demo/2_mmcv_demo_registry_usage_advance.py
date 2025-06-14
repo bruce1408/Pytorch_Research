@@ -3,28 +3,19 @@ from typing import Dict, Any, Type, Optional
 # 定义一个简单的 Registry 类，用于管理模块注册和构建
 class Registry:
     def __init__(self, name: str):
-        
-        # 给注册器类一个名字
-        self._name: str = name
-        
-        # 创建一个空字典用于存储注册的模块
-        self._module_dict: Dict[str, Type] = {}
+        self._name: str = name # 给注册器类一个名字
+        self._module_dict: Dict[str, Type] = {} # 创建一个空字典用于存储注册的模块
 
     def register_module(self, cls: Type) -> Type:
         """
         通过装饰器将类注册到 _module_dict 中
         检查类名是否存在，避免重复注册
         """
-        
-        # 获取类的名字
-        name: str = cls.__name__
-        
-        # 检查是否已经注册过同名的类
-        if name in self._module_dict:
+        name: str = cls.__name__ # 获取类名        
+        if name in self._module_dict: # 如果类名已经存在，抛出异常
             raise KeyError(f"{name} 已经在 {self._name} 中注册过了")
         
-        # 将类添加到注册字典中
-        self._module_dict[name] = cls
+        self._module_dict[name] = cls # 将类添加到注册字典中
         
         # 返回类本身，这样装饰器就不会改变类的定义
         return cls
