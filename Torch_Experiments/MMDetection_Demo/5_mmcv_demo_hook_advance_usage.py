@@ -82,12 +82,23 @@ def build_detector(cfg, train_cfg=None, test_cfg=None):
 # ——————————————————————————————————————————————
 class Hook:
     """定义所有可钩入的回调接口"""
-    def before_run(self, runner): pass  # 训练开始前
-    def after_run(self, runner): pass   # 训练结束后
-    def before_epoch(self, runner): pass  # 每个epoch开始前
-    def after_epoch(self, runner): pass   # 每个epoch结束后
-    def before_iter(self, runner): pass   # 每次迭代前
-    def after_iter(self, runner): pass    # 每次迭代后
+    def before_run(self, runner): 
+        pass  # 训练开始前
+    
+    def after_run(self, runner): 
+        pass   # 训练结束后
+    
+    def before_epoch(self, runner): 
+        pass  # 每个epoch开始前
+    
+    def after_epoch(self, runner): 
+        pass   # 每个epoch结束后
+    
+    def before_iter(self, runner): 
+        pass   # 每次迭代前
+    
+    def after_iter(self, runner): 
+        pass    # 每次迭代后
 
 class Runner:
     """

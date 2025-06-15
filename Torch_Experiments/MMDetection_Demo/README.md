@@ -96,6 +96,23 @@ Runner.run():
 
 ```
 
+
+```
+Runner执行顺序：
+1. before_run (所有Hook)
+   └── 开始训练循环 (for epoch in range(max_epochs))
+       ├── before_train_epoch (所有Hook)
+       │   └── 开始批次循环 (for batch in dataloader)
+       │       ├── before_train_iter (所有Hook)
+       │       ├── 执行batch_processor处理数据
+       │       │   ├── 前向传播
+       │       │   ├── 计算损失
+       │       │   └── 反向传播和优化
+       │       └── after_train_iter (所有Hook)
+       └── after_train_epoch (所有Hook)
+   └── after_run (所有Hook)
+```
+
 ## 它们做什么？
 Runner 解耦了「训练循环」和「模型实现」，让你无需写 for epoch, for batch
 

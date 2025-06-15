@@ -56,6 +56,7 @@ class Trainer:
         
         for epoch in range(num_epochs):
             self.epoch = epoch
+            
             # 触发每个epoch开始前的钩子
             self.hook_manager.trigger_hooks(
                 EventType.BEFORE_EPOCH, 
