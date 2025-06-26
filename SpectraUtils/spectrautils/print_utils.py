@@ -6,6 +6,7 @@ import sys
 import os
 import atexit
 import threading
+import textwrap
 from logging.handlers import QueueHandler, QueueListener
 from termcolor import colored
 
@@ -180,16 +181,39 @@ def print_colored_text(text, text_color='white', attrs=['bold']):
         attrs (list): 文本的属性 (e.g., 'bold', 'underline', 'reverse'). 
                       用于控制文本样式，实现类似“大小”变化的效果。
     """
+    # with print_lock:
+    #     # 我们同样使用 print_lock 来确保线程安全
+    #     if isinstance(text, list):
+    #         # 如果输入的是一个列表，我们就一行一行地打印
+    #         for item in text:
+    #             # 使用 termcolor.colored 函数来给文本添加颜色和样式
+    #             colored_text = colored(item, text_color, attrs=attrs)
+    #             # 使用异步日志记录器来输出
+    #             logger_manager.logger.info(colored_text)
+    #     else:
+    #         # 如果输入的是单个字符串，直接打印
+    #         colored_text = colored(text, text_color, attrs=attrs)
+    #         logger_manager.logger.info(colored_text)
+            
+            
     with print_lock:
-        # 我们同样使用 print_lock 来确保线程安全
-        if isinstance(text, list):
-            # 如果输入的是一个列表，我们就一行一行地打印
-            for item in text:
-                # 使用 termcolor.colored 函数来给文本添加颜色和样式
-                colored_text = colored(item, text_color, attrs=attrs)
-                # 使用异步日志记录器来输出
+            # 我们同样使用 print_lock 来确保线程安全
+            if isinstance(text, list):
+                # 如果输入的是一个列表，我们就一行一行地打印
+                for item in text:
+                    # 使用 termcolor.colored 函数来给文本添加颜色和样式
+                    colored_text = colored(item, text_color, attrs=attrs)
+                    # 使用异步日志记录器来输出
+                    logger_manager.logger.info(colored_text)
+            else:
+                # 如果输入的是单个字符串
+                text_to_print = text
+                # 如果字符串中包含换行符，我们假定它是一个多行字符串，
+                # 并使用 textwrap.dedent 来移除代码中为了格式化而添加的前导空格。
+                # .strip() 会移除开头和结尾可能存在的空行。
+                if isinstance(text, str) and '\n' in text:
+                    text_to_print = textwrap.dedent(text).strip()
+                
+                # 如果输入的是单个字符串，直接打印
+                colored_text = colored(text_to_print, text_color, attrs=attrs)
                 logger_manager.logger.info(colored_text)
-        else:
-            # 如果输入的是单个字符串，直接打印
-            colored_text = colored(text, text_color, attrs=attrs)
-            logger_manager.logger.info(colored_text)
