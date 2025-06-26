@@ -168,3 +168,28 @@ def print_colored_box_line(title, message, attrs=['bold'], text_color='white', b
         logger_manager.logger.info(colored_horizontal_border)
         logger_manager.logger.info(colored_message)
         logger_manager.logger.info(colored_horizontal_border)
+
+
+def print_colored_text(text, text_color='white', attrs=['bold']):
+    """
+    打印带有颜色的文本，不带方框。
+
+    Args:
+        text (str or list): 要打印的文本。如果是一个列表，将逐行打印。
+        text_color (str): 文本的颜色 (e.g., 'red', 'green', 'yellow').
+        attrs (list): 文本的属性 (e.g., 'bold', 'underline', 'reverse'). 
+                      用于控制文本样式，实现类似“大小”变化的效果。
+    """
+    with print_lock:
+        # 我们同样使用 print_lock 来确保线程安全
+        if isinstance(text, list):
+            # 如果输入的是一个列表，我们就一行一行地打印
+            for item in text:
+                # 使用 termcolor.colored 函数来给文本添加颜色和样式
+                colored_text = colored(item, text_color, attrs=attrs)
+                # 使用异步日志记录器来输出
+                logger_manager.logger.info(colored_text)
+        else:
+            # 如果输入的是单个字符串，直接打印
+            colored_text = colored(text, text_color, attrs=attrs)
+            logger_manager.logger.info(colored_text)

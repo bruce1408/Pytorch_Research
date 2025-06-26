@@ -211,6 +211,9 @@ if __name__ == "__main__":
     # 1. 构建模型
     model = build_detector(model_cfg, train_cfg=train_cfg, test_cfg=test_cfg)
     model.init_weights()
+    
+    import pdb; pdb.set_trace()  # 添加断点
+
 
     # 2. 构造假数据集
     data = list(range(1, 6))  # 5 个 sample
