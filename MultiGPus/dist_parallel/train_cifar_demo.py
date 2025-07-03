@@ -17,8 +17,7 @@ import torch.utils.data.distributed
 from model import pyramidnet
 import argparse
 
-logger_manager = logging_utils.AsyncLoggerManager(work_dir='./logs')
-logger = logger_manager.logger
+logger = None
 
 # from tensorboardX import SummaryWriter
 parser = argparse.ArgumentParser(description='cifar10 classification models')
@@ -27,7 +26,7 @@ parser.add_argument('--resume', default="./dist_output/last.pth", help='断点�
 parser.add_argument('--batch_size', type=int, default=256, help='')
 parser.add_argument('--num_workers', type=int, default=10, help='')
 parser.add_argument('--epoch', type=int, default=6, help='训练epoch次数')
-parser.add_argument("--gpu_devices", type=int, nargs='+', default=[6, 7], help="gpu设备编号")
+parser.add_argument("--gpu_devices", type=int, nargs='+', default=[0, 1, 2, 3], help="gpu设备编号")
 
 parser.add_argument('--gpu', default=2, type=int, help='GPU id to use.')
 parser.add_argument('--dist-url', default='tcp://127.0.0.1:3456', type=str, help='')
@@ -38,15 +37,22 @@ parser.add_argument('--distributed', action='store_true', help='')
 parser.add_argument("--output", default="./dist_output", help="the path of save model")
 args = parser.parse_args()
 
-gpu_devices = ','.join([str(id) for id in args.gpu_devices])
-os.environ["CUDA_VISIBLE_DEVICES"] = gpu_devices
+logger_manager = logging_utils.AsyncLoggerManager(work_dir='./logs')
+logger = logger_manager.logger
+    
+def setup_environment(args: argparse.Namespace) -> None:
+    """设置环境"""
+    gpu_devices = ','.join([str(id) for id in args.gpu_devices])
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_devices
+    cudnn.benchmark = True
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(current_dir)
 
-# 添加进入代码目录的功能
-current_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(current_dir)
+     
 
 def main():
     args = parser.parse_args()
+    setup_environment(args)
     os.makedirs(args.output, exist_ok=True)
     ngpus_per_node = torch.cuda.device_count()
     print("has gpu nums: ", ngpus_per_node)
@@ -55,11 +61,11 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    print("main worker: ", gpu)
+    # print("main worker: ", gpu)
     args.gpu = gpu
     ngpus_per_node = torch.cuda.device_count()
     print("Use GPU: {} for training".format(args.gpu))
-    print(args.gpu, args.rank)
+    # print(args.gpu, args.rank)
 
     args.rank = args.rank * ngpus_per_node + gpu
     dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
@@ -111,7 +117,7 @@ def main_worker(gpu, ngpus_per_node, args):
             net.load_state_dict(state_dict)
             optimizer.load_state_dict(checkpoint['optimizer'])
             start_epoch = checkpoint['epoch']
-            print_utils.print_colored_box("=> 成功加载断点 '{}' (epoch {})".format(args.resume, start_epoch))
+            print_utils.print_colored_text("=> 成功加载断点 '{}' (epoch {})".format(args.resume, start_epoch))
         else:
             print("=> 未找到断点 '{}'".format(args.resume))
 
@@ -177,9 +183,6 @@ def train(net, criterion, optimizer, train_loader, start_epoch, epoch, device):
 
 if __name__ == '__main__':
     try:
-        total_start_time = time.time()
         main()
-        total_end_time = time.time()
-        print("cost time :", total_end_time - total_start_time)
     except KeyboardInterrupt:
         print("KeyboardInterrupt")
