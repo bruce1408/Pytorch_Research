@@ -14,7 +14,7 @@ from torchvision import transforms, datasets
 
 from model import pyramidnet  # 假设您的模型定义在这个文件里
 from spectrautils import logging_utils # 假设您的日志工具在这里
-os.environ["OMP_NUM_THREADS"] = 4
+os.environ["OMP_NUM_THREADS"] = "4"
 # --- MODIFIED: 简化 argparse，移除不再需要的分布式参数 ---
 parser = argparse.ArgumentParser(description='cifar10 classification models with torchrun')
 parser.add_argument('--lr', default=0.1, type=float, help='Learning rate')
