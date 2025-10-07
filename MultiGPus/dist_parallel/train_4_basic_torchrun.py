@@ -14,6 +14,7 @@ from torchvision import transforms, datasets
 
 from model import pyramidnet  # 假设您的模型定义在这个文件里
 from spectrautils import logging_utils # 假设您的日志工具在这里
+
 os.environ["OMP_NUM_THREADS"] = "4"
 # --- MODIFIED: 简化 argparse，移除不再需要的分布式参数 ---
 parser = argparse.ArgumentParser(description='cifar10 classification models with torchrun')
@@ -23,12 +24,6 @@ parser.add_argument('--batch_size', type=int, default=128, help='Total batch siz
 parser.add_argument('--num_workers', type=int, default=8, help='Total number of data loading workers across all GPUs')
 parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
 parser.add_argument("--output", default="./dist_output_torchrun", help="Path to save model checkpoints")
-
-# ... 您原来的 AverageMeter, ProgressMeter, accuracy 函数可以保持不变 ...
-# (为了简洁，这里省略了这些辅助类和函数的代码，您可以直接从原文件复制)
-# ...
-# 假设 AverageMeter, ProgressMeter, accuracy, train 函数都已定义好
-# ...
 
 def main():
     args = parser.parse_args()
@@ -114,5 +109,5 @@ def main():
 if __name__ == '__main__':
     # --- DELETED: 删除了整个 mp.spawn 逻辑 ---
     # `torchrun` 会负责启动多个进程来运行下面的 main 函数
-    # torchrun --nproc_per_node=4 train_demo_2_torchrun.py --batch_size 128 --epochs 10
+    # torchrun --nproc_per_node=4 train_4_basic_torchrun.py --batch_size 128 --epochs 10
     main()

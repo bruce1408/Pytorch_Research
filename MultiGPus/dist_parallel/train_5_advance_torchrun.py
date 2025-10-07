@@ -53,11 +53,14 @@ def main():
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ])
+    
     dataset_train = datasets.CIFAR10(root='./', train=True, download=True, transform=transforms_train)
     train_sampler = DistributedSampler(dataset_train, num_replicas=world_size, rank=rank)
-    train_loader = DataLoader(dataset_train, batch_size=per_device_batch_size, 
+    train_loader = DataLoader(dataset_train, 
+                              batch_size=per_device_batch_size, 
                               num_workers=args.num_workers // world_size,
-                              sampler=train_sampler, pin_memory=True)
+                              sampler=train_sampler, 
+                              pin_memory=True)
 
     # --- 4. 模型与优化器准备 ---
     model = pyramidnet().to(local_rank)
