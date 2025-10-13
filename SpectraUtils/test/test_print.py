@@ -9,6 +9,7 @@ LastEditTime: 2025-02-03 16:24:47
 import os
 import sys
 import torch.distributed as dist
+from tabulate import tabulate
 
 
 # 获取项目的根目录并添加到 sys.path
@@ -77,3 +78,38 @@ except Exception as e:
     print_colored_box("发生异常: {}".format(str(e)))
     print_colored_box("在非分布式环境中: Epoch {} 已完成！".format(idx + 1))
 
+
+
+# ============================== 测试 tabulate ==============================
+# 1. 准备你的数据 (列表的列表)
+my_data = [
+    ["Alice", 28, "Engineer"],
+    ["Bob", 34, "Doctor"],
+    ["Charlie", 22, "Artist"]
+]
+
+# 2. 定义表头
+my_headers = ["Name", "Age", "Occupation"]
+
+# 3. 调用 tabulate 函数并打印
+table = tabulate(my_data, headers=my_headers)
+print(table)
+
+my_data = [
+    ["Alice", 28, "Engineer"],
+    ["Bob", 34, "Doctor"],
+]
+my_headers = ["Name", "Age", "Occupation"]
+
+# 尝试 "grid" 格式
+print("--- Format: grid ---")
+print(tabulate(my_data, headers=my_headers, tablefmt="grid"))
+
+# 尝试 "fancy_grid" 格式
+print("\n--- Format: fancy_grid ---")
+print(tabulate(my_data, headers=my_headers, tablefmt="fancy_grid"))
+
+# 尝试 "pipe" 格式 (Markdown 格式)
+print("\n--- Format: pipe ---")
+print(tabulate(my_data, headers=my_headers, tablefmt="pipe"))
+# ============================== 测试 tabulate ==============================
