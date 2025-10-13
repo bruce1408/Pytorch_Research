@@ -4,7 +4,7 @@ from tabulate import tabulate
 onnx_path = "/mnt/share_disk/bruce_trie/workspace/Quantizer-Tools/_outputs/models/resnet18.onnx"
 model = onnx.load(onnx_path)
 
-# 获取模型的initializer 初始化值
+# 获取模型的 initializer 初始化值，即有权重参与计算的都可以是initializer
 initializers = model.graph.initializer
 
 initializers_list = {
@@ -20,7 +20,7 @@ for init in initializers:
 
 print(tabulate(initializers_list, headers="keys", tablefmt="fancy_grid"))
 
-print("="*100)
+print("="*30)
 # exit(0)
 
 node_list = {
