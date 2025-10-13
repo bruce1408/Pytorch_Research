@@ -8,7 +8,7 @@ def enter_workspace():
     """
     # inspect.stack()[1] 获取的是调用者的堆栈帧信息
     caller_frame = inspect.stack()[1]
-        
+
     # 从堆栈帧中拿到调用者脚本的文件路径
     caller_filepath = caller_frame.filename
     
@@ -18,4 +18,4 @@ def enter_workspace():
     # 将当前工作目录切换到该目录
     os.chdir(caller_dir)
     
-    print(f"成功进入工作目录: {os.getcwd()}")
+    # print(f"成功进入工作目录: {os.getcwd()}")
