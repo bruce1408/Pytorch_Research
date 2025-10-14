@@ -3,9 +3,11 @@ import onnx
 import onnxsim
 import numpy as np
 import torch.nn as nn
-from torchsummary import summary
+# from torchsummary import summary
 import onnx_graphsurgeon as gs
-from printk import print_colored_box
+from spectrautils.print_utils import print_colored_box
+from common import enter_workspace
+enter_workspace()
 
 
 class Model(torch.nn.Module):
@@ -93,11 +95,13 @@ def custom_fuse_layernorm():
     print("after fuse layernorm")
 
 if __name__ == "__main__":
+    
     export_onnx_graph()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     model = Model().to(device)
-    summary(model, (3, 224, 224), device=device.type)
+    # summary(model, (3, 224, 224), device=device.type)
      
     custom_fuse_layernorm()
     print_colored_box("Done")

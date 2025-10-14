@@ -1,9 +1,21 @@
 import onnx
+from onnx import numpy_helper
 from tabulate import tabulate
 # 加载 ONNX 模型
-onnx_path = "/mnt/share_disk/bruce_trie/workspace/Quantizer-Tools/_outputs/models/resnet18.onnx"
+# onnx_path = "/mnt/share_disk/bruce_trie/workspace/Quantizer-Tools/_outputs/models/resnet18.onnx"
+onnx_path = "/mnt/share_disk/bruce_trie/workspace/yolov8n.onnx"
+onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/Static_Graph_Operations/ONNX_GraphSurgon/const_and.onnx"
 model = onnx.load(onnx_path)
 
+
+for node in model.graph.node:
+    if node.op_type == "Constant":
+        print(node.name)
+        tensor = numpy_helper.to_array(node.attribute[0].t)
+
+
+
+exit(0)
 # 获取模型的 initializer 初始化值，即有权重参与计算的都可以是initializer
 initializers = model.graph.initializer
 
@@ -15,7 +27,7 @@ initializers_list = {
 
 for init in initializers:
     initializers_list["name"].append(init.name)
-    initializers_list["dims"].append(init.dims)
+    initializers_list["dims"].append(init.dims) 
     initializers_list["data_type"].append(init.data_type)
 
 print(tabulate(initializers_list, headers="keys", tablefmt="fancy_grid"))
@@ -32,6 +44,7 @@ node_list = {
     # "domain": [],
     # "doc_string": []
 }
+
 for node in model.graph.node:
     node_list["name"].append(node.name)
     node_list["op_type"].append(node.op_type)
