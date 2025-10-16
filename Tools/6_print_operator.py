@@ -1,11 +1,10 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 import onnx
 import argparse
 import sys
 from collections import Counter
+from spectrautils.common_utils import enter_workspace
 
+enter_workspace
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description='打印ONNX模型中的所有算子')

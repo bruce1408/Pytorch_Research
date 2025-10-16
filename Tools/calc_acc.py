@@ -5,11 +5,9 @@ from shutil import copy
 from PIL import Image
 import cv2
 import numpy as np
-import sys
-curpath = os.path.abspath(os.path.dirname(""))
-sys.path.append(curpath)
-from utils.beautifull_print_terminate import *
-
+from spectrautils.print_utils import *
+from spectrautils.common_utils import enter_workspace
+enter_workspace()
 
 def compare_res_with_evm_acc(img_txt_evm_res, img_txt_std_res):
     
@@ -23,7 +21,7 @@ def compare_res_with_evm_acc(img_txt_evm_res, img_txt_std_res):
                 img_name_perfix, gt_label = eachline.split(":")
                 img_std_res[img_name_perfix] = int(gt_label)
     except IOError:
-        print_error("can not open file {}".format(img_txt_std_res))
+        print_colored_text("can not open file {}".format(img_txt_std_res))
 
     try:
         with open(img_txt_evm_res) as f:  
@@ -34,16 +32,11 @@ def compare_res_with_evm_acc(img_txt_evm_res, img_txt_std_res):
                 if(img_std_res[img_name.split(".")[0]]  == int(label)):
                     total_pred_num += 1
                 total_num += 1
-    
-        print_info_custom('------------------------------------------------------------------------------\n'
-            '|                    ImageNet Dataset Evaluation Results                      |\n'
-            '|                                                                             |\n'
-            
-            f'| the total img nums is {total_num}, the right predict num is {total_pred_num}, acc is: {total_pred_num / total_num:.3}    |\n'
-            '-----------------------------------------------------------------------------', ['yellow', 'bold'])
+
+        print_colored_box( f'| the total img nums is {total_num}, the right predict num is {total_pred_num}, acc is: {total_pred_num / total_num:.3} ')
 
     except IOError:
-        print_error("can not open file {}".format(img_txt_evm_res))
+        print_colored_text("can not open file {}".format(img_txt_evm_res))
     
 
 def check_img_dir(folder_path):
@@ -76,7 +69,7 @@ if __name__ == '__main__':
     
     # ========================================================================
     # 根据板卡上面的结果进行验证
-    img_txt_std_res = "/Users/bruce/PycharmProjects/Pytorch_learning/Tools/val_imagenet_label.txt"
+    img_txt_std_res = "./val_imagenet_label.txt"
     img_txt_evm_res = "/Users/bruce/Downloads/15_Ti_model_files/imagenet_bin_ptq_1127.txt"
     compare_res_with_evm_acc(img_txt_evm_res, img_txt_std_res)
     # ========================================================================
