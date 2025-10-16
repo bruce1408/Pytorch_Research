@@ -45,10 +45,14 @@ def load_onnx_weights(onnx_file):
 
     return weights
 
-def compare_weights(weights1, weights2, output_file=None):
+def compare_weights(onnx_file1, onnx_file2, output_file=None):
     """
     比较两个 ONNX 模型的权重差异，并可选择将结果写入文件
     """
+    
+    weights1 = load_onnx_weights(onnx_file1)
+    weights2 = load_onnx_weights(onnx_file2)
+    
     all_layers_same = True
     results = []  # 存储基本比较结果
     diff_results = []  # 存储带有差异值的结果，用于排序
@@ -122,13 +126,10 @@ def main():
     onnx_file2 = '/home/bruce_ultra/workspace/8620_code_repo/8620_code_x86/onnx_models/od_bev_0306.onnx'
 
     # 加载权重
-    weights1 = load_onnx_weights(onnx_file1)
-    weights2 = load_onnx_weights(onnx_file2)
-
     output_file = 'onnx_weight_comparison_result.txt'
 
     # 比较权重差异
-    all_same = compare_weights(weights1, weights2, output_file)
+    all_same = compare_weights(onnx_file1, onnx_file2, output_file)
 
     if all_same:
         print("The models have no significant weight differences.")
