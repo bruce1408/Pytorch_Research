@@ -13,7 +13,7 @@ setup(
     # package information
     
     name="spectrautils",
-    version="0.3.3",
+    version="0.3.5",
     packages=find_packages(),
     description="A powerful tools for python",
     author="bruce_cui",

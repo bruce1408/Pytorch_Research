@@ -8,4 +8,7 @@ from .time_utils import time_it
 from .common_utils import enter_workspace
 
 # 从 onnx_utils 子包中导入需要的函数
-from .onnx_utils import get_onnx_model_input_output_info, print_model_operators, visualize_onnx_model_weights,visualize_torch_model_weights
+from .onnx_utils import get_onnx_model_input_output_info,\
+visualize_onnx_model_weights,\
+visualize_torch_model_weights, \
+print_operator_summary, print_operator_details

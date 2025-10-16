@@ -33,7 +33,7 @@ if __name__ == '__main__':
     output_names = ['output']
     export_model_onnx(model, 
                       input_info,
-                      "/mnt/share_disk/bruce_trie/workspace/perception_quanti/demo_18/resnet18.onnx",
+                      "./resnet18.onnx",
                       output_names
                     )
     

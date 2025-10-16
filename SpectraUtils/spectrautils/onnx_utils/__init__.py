@@ -14,5 +14,4 @@ __all__ = [
     "visualize_onnx_model_weights",
     "visualize_torch_model_weights",
     "compare_weights",
-    "print_operators"
 ]
