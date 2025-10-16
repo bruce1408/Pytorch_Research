@@ -39,6 +39,6 @@ def print_model_operators(model_path: str, detailed: bool = False) -> None:
                     
 if __name__ == "__main__":
     
-    onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
+    onnx_path = "/home/bruce_ultra/workspace/quant_workspace/Quantizer-Tools/_outputs/models/yolov8n.onnx"
     print_model_operators(onnx_path)
     

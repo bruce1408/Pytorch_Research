@@ -762,7 +762,7 @@ def visualize_weight_ranges(
     )
 
     plotting.save(layout)
-    print_utils.print_colored_box(f"Visualization saved to: {file_path}")
+    print_utils.print_colored_text(f"Visualization saved to: {file_path}")
     # =========================================================
     return subplots
 
@@ -836,7 +836,7 @@ def visualize_relative_weight_ranges_to_identify_problematic_layers(
     )
 
     plotting.save(layout)
-    print(f"Visualization saved to: {file_path}")
+    # print(f"Visualization saved to: {file_path}")
     return subplots
 
 
@@ -879,7 +879,7 @@ def visualize_torch_model_weights(model: torch.nn.Module , model_name: str, resu
         is_onnx=False
     )
     
-    print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
+    print_utils.print_colored_text(f"Visualization results have been saved to:\n {os.path.abspath(results_dir)}", "green")
 
 
 def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: str = None):
@@ -913,18 +913,18 @@ def visualize_onnx_model_weights(onnx_path: str, model_name: str, results_dir: s
     # 可视化权重和有问题的输出
     visualize_relative_weight_ranges_to_identify_problematic_layers(weights, results_dir, is_onnx=True)
     
-    print_utils.print_colored_box(f"Visualization results have been saved to: {results_dir}")
+    print_utils.print_colored_text(f"Visualization results have been saved to:\n {os.path.abspath(results_dir)}", "green")
 
     
 if __name__ == "__main__":
     # onnx_path = "/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet18_official.onnx"
-    onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
+    onnx_path = "/home/bruce_ultra/workspace/perception_quanti/avp_parkspace/20240603/psd2d_v1_1_0_8650_eca_simplifier.onnx"
     
     # Example usage with different models
     model_old = torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
     
     # 加载你的本地模型
-    model_new = torch.load('/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet_model_cle_bc.pt')
+    # model_new = torch.load('/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/SpectraUtils/spectrautils/resnet_model_cle_bc.pt')
 
     # model_new = torchvision.models.resnet18(pretrained=False)
 

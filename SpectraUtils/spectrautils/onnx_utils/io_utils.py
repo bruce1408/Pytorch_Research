@@ -1,3 +1,5 @@
+import hashlib
+import os
 import onnx, torch
 import onnxruntime as ort
 from collections import OrderedDict
@@ -95,9 +97,6 @@ def export_model_onnx(
     print("onnx model export to: ", export_path)
     
 
-import hashlib
-import os
-
 def show_file_md5(file_path):
     """
     计算并显示指定文件的MD5值
@@ -152,4 +151,4 @@ if __name__ == "__main__":
     #                   output_names
     #                 )
     
-    show_file_md5("/mnt/share_disk/bruce_trie/workspace/outputs/parking_space_models/psd_v2_1_2_simplifier.onnx")
+    show_file_md5("./perception_quanti/avp_parkspace/20240603/psd2d_v1_1_0_8650_eca_simplifier.onnx")

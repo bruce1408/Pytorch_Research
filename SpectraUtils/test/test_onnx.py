@@ -1,23 +1,28 @@
-import os
+import os, sys
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
 import torch
 from torchvision import models
 from  torchvision.models import ResNet18_Weights
 from spectrautils.onnx_utils import visualize_onnx_model_weights,visualize_torch_model_weights
-from spectrautils.onnx_utils import export_model_onnx
-
+from spectrautils.onnx_utils import export_model_onnx, visualize_onnx_model_weights
 
 if __name__ == '__main__':
     
     # 加载onnx模型
-    onnx_path = "/share/cdd/onnx_models/od_bev_0317.onnx"
-    model_name = "od_bev_test"
+    # onnx_path = "/home/bruce_ultra/workspace/perception_quanti/avp_parkspace/20240603/psd2d_v1_1_0_8650_eca_simplifier.onnx"
+    # model_name = "psd2d"
     # visualize_onnx_model_weights(onnx_path, model_name)
     
+    # exit(0)
+    
     # 加载torch模型
-    model_new = torch.load('/share/cdd/onnx_models/resnet_model_cle_bc.pt')
-    # visualize_torch_model_weights(model_new, "resnet18_new")
+    # model_new = torch.load('/home/bruce_ultra/workspace/quant_workspace/Quantizer-Tools/_outputs/models/resnet18-f37072fd.pth')
+    model_new = models.resnet18(pretrained=True)
+    visualize_torch_model_weights(model_new, "resnet18_new")
     
-    
+    # exit(0)
     # 加载预训练的ResNet18模型
     model = models.resnet18(pretrained=True)
     
@@ -31,5 +36,9 @@ if __name__ == '__main__':
                       "/mnt/share_disk/bruce_trie/workspace/perception_quanti/demo_18/resnet18.onnx",
                       output_names
                     )
+    
+    
+    
+
     
     

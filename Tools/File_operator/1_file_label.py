@@ -24,7 +24,6 @@ with open(image_label_path) as f:
             if(eachline == "crane"):
                 print("==============", value, eachline.strip())
             if(eachline.strip() == value):
-                # print(eachline.strip(), value)
                 label_dict[key] = label
         label = label+1
 print(label_dict)

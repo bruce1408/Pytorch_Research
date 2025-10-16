@@ -4,15 +4,17 @@ import sys
 from collections import Counter
 from spectrautils.common_utils import enter_workspace
 
-enter_workspace
+enter_workspace()
+
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description='打印ONNX模型中的所有算子')
     parser.add_argument('--model_path', type=str, 
                         default="/home/bruce_ultra/workspace/8620_code_repo/8620_code_x86/onnx_models/od_bev_0306.onnx",
                         help='ONNX模型文件路径')
+    
     parser.add_argument('--count',   '-c', default=True, help='统计每种算子的数量')
-    parser.add_argument('--details', '-d', default=True, help='显示每个算子的详细信息')
+    parser.add_argument('--details', '-d', default=False, help='显示每个算子的详细信息')
     parser.add_argument('--output', '-o', type=str, default="./od_bev_0306.txt", help='输出文件路径，不指定则输出到控制台')
     return parser.parse_args()  # 这里需要返回解析结果
 
