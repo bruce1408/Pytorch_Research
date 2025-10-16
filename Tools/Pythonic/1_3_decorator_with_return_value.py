@@ -22,3 +22,7 @@ def calculate_sum(n):
 
 sum_result = calculate_sum(1000000)
 print(f"计算结果: {sum_result}")
+
+# 这里丢失了函数的元信息，函数名以及文档字符串
+print(calculate_sum.__name__) # 输出 wrapper，而不是 calculate_sum
+print(calculate_sum.__doc__)  # 输出 None
