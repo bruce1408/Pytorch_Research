@@ -1,6 +1,8 @@
 import numpy as np
 import onnx
 import onnx_graphsurgeon as gs
+from common import enter_workspace
+enter_workspace()
 
 def generate_model():
     # ==========================================================================
@@ -23,7 +25,7 @@ def generate_model():
     # Generate the graph
     graph = gs.Graph()
 
-    graph.inputs = [gs.Variable("input", shape=(4, 4), dtype=np.float32)]
+    graph.inputs = gs.Variable("input", shape=(4, 4), dtype=np.float32)
 
     # # Clip values to [0, 6]
     MIN_VAL = np.array(0, np.float32)
@@ -60,7 +62,7 @@ def modify_onnx():
 
     # Now we'll do the actual replacement
     # 导入onnx模型
-    graph = gs.import_onnx(onnx.load("model.onnx"))
+    graph = gs.import_onnx(onnx.load("./clip_model.onnx"))
 
     tmap = graph.tensors()
     # You can figure out the input and output tensors using Netron. In our case:

@@ -2,6 +2,7 @@ import os
 import time
 import datetime
 import torch
+import argparse
 import torchvision
 import torch.nn as nn
 import torch.optim as optim
@@ -15,9 +16,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.utils.data.distributed
 from model import pyramidnet
-import argparse
 
-logger = None
 
 # from tensorboardX import SummaryWriter
 parser = argparse.ArgumentParser(description='cifar10 classification models')
@@ -49,7 +48,6 @@ def setup_environment(args: argparse.Namespace) -> None:
     os.chdir(current_dir)
 
      
-
 def main():
     args = parser.parse_args()
     setup_environment(args)
@@ -61,15 +59,15 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    # print("main worker: ", gpu)
     args.gpu = gpu
     ngpus_per_node = torch.cuda.device_count()
-    print("Use GPU: {} for training".format(args.gpu))
-    # print(args.gpu, args.rank)
 
     args.rank = args.rank * ngpus_per_node + gpu
-    dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                            world_size=args.world_size, rank=args.rank)
+    dist.init_process_group(backend=args.dist_backend, 
+                            init_method=args.dist_url,
+                            world_size=args.world_size, 
+                            rank=args.rank
+                        )
 
     print('==> Making model..')
     torch.cuda.set_device(args.gpu)
@@ -77,8 +75,9 @@ def main_worker(gpu, ngpus_per_node, args):
     net = torch.nn.SyncBatchNorm.convert_sync_batchnorm(net)
 
     net.cuda(args.gpu)
-    args.batch_size = int(args.batch_size / ngpus_per_node)
-    args.num_workers = int(args.num_workers / ngpus_per_node)
+    args.batch_size = int(args.batch_size / ngpus_per_node)     # 每个GPU的batch_size
+    args.num_workers = int(args.num_workers / ngpus_per_node)   # 每个GPU的num_workers
+    
     net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu])
     num_params = sum(p.numel() for p in net.parameters() if p.requires_grad)            
             
@@ -104,8 +103,7 @@ def main_worker(gpu, ngpus_per_node, args):
                'dog', 'frog', 'horse', 'ship', 'truck')
     
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                          momentum=0.9, weight_decay=1e-4)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
     
     start_epoch = 0
     if args.resume:

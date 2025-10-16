@@ -231,13 +231,13 @@ def train(net, criterion, optimizer, train_loader, device, epoch):
     progress = ProgressMeter(
         len(train_loader),
         [batch_time, data_time, losses, top1],
-        prefix="Epoch:[{}]".format(epoch))
+        prefix="Epoch:[{}]".format(epoch + 1))
 
     net.train()
     train_loss = 0
     correct = 0
     total = 0
-
+    rank = dist.get_rank()
     epoch_start = time.time()
     for batch_idx, (inputs, targets) in enumerate(train_loader):
         # optimizer.zero_grad()
@@ -267,19 +267,18 @@ def train(net, criterion, optimizer, train_loader, device, epoch):
         epoch_start = time.time()
 
         # 不会重复打印
-        if batch_idx % 20 == 0 and dist.get_rank() == 0:
+        if batch_idx % 20 == 0 and rank == 0:
             # log.logger.info('Epoch: [{}/{}]| loss: {:.3f} | acc: {:.3f} | batch time: {:.3f}s '.format(
             #     batch_idx, len(train_loader), train_loss / (batch_idx + 1), acc, batch_time))
             progress.display(batch_idx + 1)
 
-        if batch_idx % 100 == 0 and dist.get_rank() == 0:
+        if batch_idx % 100 == 0 and rank == 0:
             state = {
                 "model": net.state_dict(),
                 "batch": batch_idx,
                 "optimizer": optimizer.state_dict(),
             }
             torch.save(state, os.path.join(args.output, "last.pth"))
-            # print("model has been saved!")
 
     elapse_time = time.time() - epoch_start
     elapse_time = datetime.timedelta(seconds=elapse_time)

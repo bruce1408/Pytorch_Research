@@ -1,9 +1,11 @@
 import onnx
 from onnx import helper
 from onnx import TensorProto
-import onnx
 from onnx.helper import make_tensor_value_info as mtvi
 from onnx import GraphProto, NodeProto
+from common import enter_workspace
+
+enter_workspace()
 
 # 它用于创建 TensorValueInfo 对象，该对象用于定义张量的数据类型和形状。通常在创建 ONNX 模型时，会使用这个函数来描述输入、输出或中间张量的属性
 def demo_1_create_tensor_value_info_example():
@@ -12,7 +14,7 @@ def demo_1_create_tensor_value_info_example():
     tensor_type = TensorProto.FLOAT  # 数据类型为浮点型
     tensor_shape = [1, 3, 224, 224]  # 形状为 (1, 3, 224, 224)，通常用于图像数据
 
-    # 使用 make_tensor_value_info 创建 ValueInfoProto 对象
+    # 使用 make_tensor_value_info 函数创建 ValueInfoProto 对象
     tensor_value_info = helper.make_tensor_value_info(
         name=tensor_name,
         elem_type=tensor_type,
@@ -60,6 +62,6 @@ def demo_2_create_tensor_value_info_example():
 
 
 # 调用示例函数
-demo_1_create_tensor_value_info_example()
+# demo_1_create_tensor_value_info_example()
 
 demo_2_create_tensor_value_info_example()

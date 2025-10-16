@@ -60,7 +60,8 @@ def prepare_data(batch_size: int, num_workers: int, prefetch_factor: int = 2) ->
 
     # 加载CIFAR10训练集
     dataset_train = CIFAR10(
-        root='/share/cdd', 
+        # root='/share/cdd', 
+        root="/mnt/share_disk/bruce_trie/workspace/Pytorch_Research/MultiGPus/dist_parallel",
         train=True, 
         download=False,
         transform=transforms_train
@@ -89,13 +90,13 @@ def build_model(device: torch.device) -> nn.Module:
     # 创建基础模型
     net = pyramidnet()
     
+    # 将模型转移到GPU
+    net = net.to(device)
+    
     # 使用DistributedDataParallel替代DataParallel以获得更好的性能
     if torch.cuda.device_count() > 1:
         print(f"使用 {torch.cuda.device_count()} 个GPU训练")
-        net = nn.DataParallel(net)
-    
-    # 将模型转移到GPU
-    net = net.to(device)
+        net = nn.DataParallel(net)    
     
     # 打印模型参数量
     num_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
