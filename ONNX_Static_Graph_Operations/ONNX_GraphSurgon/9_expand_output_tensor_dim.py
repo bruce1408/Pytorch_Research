@@ -2,7 +2,8 @@ import onnx
 import numpy as np
 from onnx import numpy_helper
 from printk import print_colored_box, print_colored_box_line
-
+from common import enter_workspace
+enter_workspace()
 
 def expand_dim(model_path):
     # 加载原始模型
@@ -25,5 +26,5 @@ def expand_dim(model_path):
 
         
 if __name__ == "__main__":
-    model_path="/Users/bruce/Downloads/Chip_test_models/backbone_224_224/regnety_002.onnx"
+    model_path="/home/bruce_ultra/workspace/Pytorch_Research/models/yolov8n.onnx"
     expand_dim(model_path)

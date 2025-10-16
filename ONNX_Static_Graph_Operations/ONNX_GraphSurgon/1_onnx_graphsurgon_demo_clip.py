@@ -25,7 +25,7 @@ def generate_model():
     # Generate the graph
     graph = gs.Graph()
 
-    graph.inputs = gs.Variable("input", shape=(4, 4), dtype=np.float32)
+    graph.inputs = [gs.Variable("input", shape=(4, 4), dtype=np.float32)]
 
     # # Clip values to [0, 6]
     MIN_VAL = np.array(0, np.float32)
@@ -84,7 +84,7 @@ def modify_onnx():
     
 if __name__ == "__main__":
     # ==========================================================================
-    # generate_model()
+    generate_model()
     # ==========================================================================
     modify_onnx()
     # ==========================================================================
