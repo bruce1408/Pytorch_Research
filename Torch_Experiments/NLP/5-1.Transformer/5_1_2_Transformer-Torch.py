@@ -6,7 +6,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import os
 
-os.environ['CUDA_VISIBLES_DEVICES'] = '0, 2,3'
+os.environ['CUDA_VISIBLES_DEVICES'] = '0'
 if torch.cuda.is_available():
     print("multi cuda")
 print("torch version: ", torch.__version__)
@@ -15,8 +15,20 @@ dtype = torch.FloatTensor
 # S: Symbol that shows starting of decoding input
 # E: Symbol that shows starting of decoding output
 # P: Symbol that will fill in blank sequence if current batch Dataset size is short than time steps
-sentences = ['ich mochte ein bier P', 'S i want a beer', 'i want a beer E']
+# ==========================================================================================
+# 1. 数据准备与预处理
+# ==========================================================================================
 
+# 准备三对用于训练的句子
+# 格式: [德语, 英语, 英语 (输出)]
+# 注意：第三句是解码器的输入，以'S'开头，表示序列开始
+sentences = ['ich mochte ein bier P', 'S i want a beer', 'i want a beer E']
+# sentences = [
+#     # enc_input           dec_input         dec_output
+#     ['ich mochte ein bier P', 'S i want a beer .', 'i want a beer . E'],
+#     ['ich mochte ein cola P', 'S i want a coke .', 'i want a coke . E'],
+#     ['ich mochte ein fanta P', 'S i want a fanta .', 'i want a fanta . E']
+# ]
 # Transformer Parameters
 # Padding Should be Zero
 src_vocab = {'P': 0, 'ich': 1, 'mochte': 2, 'ein': 3, 'bier': 4}
@@ -29,12 +41,21 @@ tgt_vocab_size = len(tgt_vocab)
 src_len = 5
 tgt_len = 5
 
-d_model = 512  # Embedding Size 词向量的维度
-d_ff = 2048  # FeedForward dimension
-d_k = d_v = 64  # dimension of K(=Q), V
-n_layers = 6  # number of Encoder of Decoder Layer
-n_heads = 8  # number of heads in Multi-Head Attention
+# ==========================================================================================
+# 2. 模型超参数定义
+# ==========================================================================================
+d_model = 512      # 词嵌入的维度 (Embedding Size)
+d_ff = 2048        # 前馈神经网络的隐藏层维度
+d_k = d_v = 64     # Q, K, V 向量的维度
+n_layers = 6       # 编码器和解码器层的数量
+n_heads = 8        # 多头注意力机制中的头数
 
+
+# ==========================================================================================
+# 3. 工具函数
+# ==========================================================================================
+
+# 设置随机种子以保证实验结果的可复现性
 
 def randomSeed(SEED):
     seed(SEED)
@@ -54,7 +75,7 @@ def make_batch(sentences):
     target_batch = [[tgt_vocab[n] for n in sentences[2].split()]]
     return torch.LongTensor(input_batch), torch.LongTensor(output_batch), torch.LongTensor(target_batch)
 
-
+# 生成正弦/余弦位置编码表
 def get_sinusoid_encoding_table(n_position, d_model):
     def cal_angle(position, hid_idx):
         return position / np.power(10000, 2 * (hid_idx // 2) / d_model)
@@ -69,6 +90,7 @@ def get_sinusoid_encoding_table(n_position, d_model):
     return torch.FloatTensor(sinusoid_table)
 
 
+# 创建 padding mask，用于忽略输入中的 'P' (索引为0)
 def get_attn_pad_mask(seq_q, seq_k):
     batch_size, len_q = seq_q.size()
     batch_size, len_k = seq_k.size()
@@ -87,6 +109,10 @@ def get_attn_subsequent_mask(seq):
     subsequent_mask = torch.from_numpy(subsequent_mask).byte()
     return subsequent_mask
 
+# ==========================================================================================
+# 4. Transformer 模型组件
+# ==========================================================================================
+# ----------------- 4.1 注意力机制核心 -----------------
 
 class ScaledDotProductAttention(nn.Module):
     def __init__(self):
@@ -295,6 +321,8 @@ def showgraph(attn):
     fig = plt.figure(figsize=(n_heads, n_heads))  # [n_heads, n_heads]
     ax = fig.add_subplot(1, 1, 1)
     ax.matshow(attn, cmap='viridis')
+    ax.set_xticks(range(len(sentences[0].split()) + 1)) # <--- 1. 添加这行来设置X轴刻度位置
+    ax.set_yticks(range(len(sentences[2].split()) + 1)) # <--- 2. 添加这行来设置Y轴刻度位置
     ax.set_xticklabels([''] + sentences[0].split(),
                        fontdict={'fontsize': 14}, rotation=90)
     ax.set_yticklabels([''] + sentences[2].split(), fontdict={'fontsize': 14})
