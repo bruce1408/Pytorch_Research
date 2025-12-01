@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
+from spectrautils.common_utils import enter_workspace
 
+enter_workspace()
 
 dtype = torch.FloatTensor
 # S: Symbol that shows starting of decoding input
@@ -250,16 +252,29 @@ def greedy_decoder(model, enc_input, start_symbol):
     return dec_input
 
 
-def showgraph(attn):
+def showgraph(attn, name):
     attn = attn[-1].squeeze(0)[0]
     attn = attn.squeeze(0).data.numpy()
     fig = plt.figure(figsize=(n_heads, n_heads))  # [n_heads, n_heads]
     ax = fig.add_subplot(1, 1, 1)
     ax.matshow(attn, cmap='viridis')
+    
+    
+    num_x_ticks = len(sentences[0].split()) + 1 # +1 是因为你前面加了一个空字符串 ''
+    ax.set_xticks(np.arange(num_x_ticks)) # 设置刻度位置，从0到num_x_ticks-1
     ax.set_xticklabels([''] + sentences[0].split(), fontdict={'fontsize': 14}, rotation=90)
-    ax.set_yticklabels([''] + sentences[2].split(), fontdict={'fontsize': 14})
-    plt.show()
 
+
+    # 获取Y轴的刻度数量
+    num_y_ticks = len(sentences[2].split()) + 1 # +1 是因为你前面加了一个空字符串 ''
+    ax.set_yticks(np.arange(num_y_ticks)) # 设置刻度位置，从0到num_y_ticks-1
+    ax.set_yticklabels([''] + sentences[2].split(), fontdict={'fontsize': 14})
+    
+    
+    # ax.set_xticklabels([''] + sentences[0].split(), fontdict={'fontsize': 14}, rotation=90)
+    # ax.set_yticklabels([''] + sentences[2].split(), fontdict={'fontsize': 14})
+    plt.savefig(f"attn_{name}.png")
+    
 
 model = Transformer()
 
@@ -282,10 +297,10 @@ predict = predict.data.max(1, keepdim=True)[1]
 print(sentences[0], '->', [number_dict[n.item()] for n in predict.squeeze()])
 
 print('first head of last state enc_self_attns')
-showgraph(enc_self_attns)
+showgraph(enc_self_attns, "enc_self_attns")
 
 print('first head of last state dec_self_attns')
-showgraph(dec_self_attns)
+showgraph(dec_self_attns, "dec_self_attns")
 
 print('first head of last state dec_enc_attns')
 

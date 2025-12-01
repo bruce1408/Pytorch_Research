@@ -111,8 +111,10 @@ def get_attn_pad_mask(seq_q, seq_k):
     """
     batch_size, len_q = seq_q.size()
     _, len_k = seq_k.size()
+    
     # .eq(0)会找到所有ID为0（即'P'）的位置，并标记为True
     pad_attn_mask = seq_k.data.eq(0).unsqueeze(1)  # 形状: [batch_size, 1, len_k]
+    
     # 将掩码扩展，使其维度和注意力分数矩阵(len_q, len_k)匹配
     return pad_attn_mask.expand(batch_size, len_q, len_k)
 
@@ -138,7 +140,8 @@ class ScaledDotProductAttention(nn.Module):
 
     def forward(self, Q, K, V, attn_mask):
         # 1. 计算Q和K的点积，得到原始的注意力分数。
-        #    除以sqrt(d_k)是为了进行缩放，防止梯度消失。
+        # 除以sqrt(d_k)是为了进行缩放，防止梯度消失。
+        # 用点积来衡量 Query 和 Key 之间的匹配程度
         scores = torch.matmul(Q, K.transpose(-1, -2)) / np.sqrt(d_k)  # [1,8,4,64] * [1,8,64,4] = [1,8,4,4]
         
         # 2. 应用掩码，将所有需要被遮盖的位置填充一个极小的负数。
@@ -236,7 +239,7 @@ class DecoderLayer(nn.Module):
         dec_outputs, dec_self_attn = self.dec_self_attn(dec_inputs, dec_inputs, dec_inputs, dec_self_attn_mask)
         
         # 2. 编码器-解码器注意力，Q来自解码器，K和V来自编码器的最终输出。
-        #    这是解码器“看”源语言句子的地方。
+        # 这是解码器“看”源语言句子的地方。
         dec_outputs, dec_enc_attn = self.dec_enc_attn(dec_outputs, enc_outputs, enc_outputs, dec_enc_attn_mask)
         dec_outputs = self.pos_ffn(dec_outputs)
         return dec_outputs, dec_self_attn, dec_enc_attn
@@ -325,6 +328,31 @@ class Transformer(nn.Module):
         # 返回最终的 logits 和各层的注意力权重（用于分析和可视化）。
         return dec_logits.view(-1, dec_logits.size(-1)), enc_self_attns, dec_self_attns, dec_enc_attns
 
+def showgraph(attn, name):
+    """ 可视化注意力权重的函数 """
+
+    attn = attn[-1].squeeze(0)[0]
+    attn = attn.squeeze(0).data.cpu().numpy()
+    fig = plt.figure(figsize=(n_heads, n_heads))  # [n_heads, n_heads]
+    ax = fig.add_subplot(1, 1, 1)
+    ax.matshow(attn, cmap='viridis')
+    
+     # --- 核心修改在这里 ---
+    # 从新的 sentences 结构中正确索引到字符串
+    source_sentence = sentences[0][0]
+    target_sentence = sentences[0][2]
+    
+    ax.set_xticks(range(len(source_sentence.split()) + 1))
+    ax.set_yticks(range(len(target_sentence.split()) + 1))
+    
+    # 使用正确的字符串变量进行 split
+    ax.set_xticklabels([''] + source_sentence.split(), fontdict={'fontsize': 14}, rotation=90)
+    ax.set_yticklabels([''] + target_sentence.split(), fontdict={'fontsize': 14})
+    
+    # plt.show()
+    plt.savefig(f"attn_{name}.png")
+    
+    
 # =========================================================================================
 # 5. 训练与测试
 # =========================================================================================
@@ -375,6 +403,12 @@ if __name__ == "__main__":
     # .max(1, keepdim=True)[1] 找到每个位置得分最高的那个词的ID
     predict = predict.data.max(1, keepdim=True)[1]
     
-    # 将预测的ID序列转换回单词序列
-    decoded_result = [number_dict[n.item()] for n in predict.squeeze()]
-    print(sentences[0][0], '->', decoded_result)
+    
+    print('first head of last state enc_self_attns')
+    showgraph(enc_self_attns, "enc_self_attns")
+
+    print('first head of last state dec_self_attns')
+    showgraph(dec_self_attns, "dec_self_attns")
+
+    print('first head of last state dec_enc_attns')
+    showgraph(dec_enc_attns, "dec_enc_attns")
