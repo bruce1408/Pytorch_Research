@@ -3,11 +3,11 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 # from utils.DataSet_train_val_test import CustomData
-from CV.utils.dog_cat import DogCat
+from data_02_dog_cat import CustomData
 
 import torch.utils.data as data
 # from utils.inception_advance import Inception_v1
-from CV.utils.VGGNet import VGGNet16
+from model_vgg_v1 import VGGNet16
 
 seed = 0
 torch.manual_seed(seed)

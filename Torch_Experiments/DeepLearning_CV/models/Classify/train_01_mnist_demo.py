@@ -6,16 +6,17 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.autograd import Variable
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Training settings
 batch_size = 64
 
-# MNIST Dataset
-train_dataset = datasets.MNIST(root='../../Dataset/MNIST_data/',
+train_dataset = datasets.MNIST(root='./Dataset/MNIST_data/',
                                train=True,
                                transform=transforms.ToTensor(),
                                download=True)
 
-test_dataset = datasets.MNIST(root='../../Dataset/MNIST_data/',
+test_dataset = datasets.MNIST(root='./Dataset/MNIST_data/',
                               train=False,
                               transform=transforms.ToTensor())
 
@@ -47,15 +48,11 @@ class Net(nn.Module):
         return F.log_softmax(x)
 
 
-model = Net()
-
-optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
-
 
 def train(epoch):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = Variable(data), Variable(target)
+        data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
         loss = F.nll_loss(output, target)
@@ -72,11 +69,11 @@ def val():
     test_loss = 0
     correct = 0
     for data, target in test_loader:
-        data, target = Variable(data, volatile=True), Variable(target)
+        data, target = data.to(device), target.to(device)
         output = model(data)
         # sum up batch loss
-        test_loss += F.nll_loss(output, target, size_average=False).item()
-        # get the index of the max log-probability
+        test_loss += F.nll_loss(output, target, reduction='sum'
+                                ).item()
         pred = output.data.max(1, keepdim=True)[1]
         correct += pred.eq(target.data.view_as(pred)).cpu().sum()
 
@@ -85,8 +82,13 @@ def val():
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
 
+if __name__ == '__main__':
 
-for epoch in range(1, 10):
-    train(epoch)
-    val()
-    np.argmax()
+    model = Net()
+    model.to(device)
+    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
+
+
+    for epoch in range(1, 5):
+        train(epoch)
+        val()

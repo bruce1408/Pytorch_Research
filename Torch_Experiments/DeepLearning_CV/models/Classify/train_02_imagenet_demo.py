@@ -12,7 +12,7 @@ import torchvision.transforms as transforms
 # from mmdet.models.backbones.efficientnet import EfficientNet
 from mmdet.models.backbones.mobilenet_v2 import MobileNetV2
 from mmdet.models.backbones.resnet import ResNet
-from utils.ImageNetCustom import ImageNetCustom
+from ImageNetCustom import ImageNetCustom
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.utils.data.distributed

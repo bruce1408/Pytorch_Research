@@ -32,7 +32,7 @@ class ImageNetCustom(data.Dataset):  # 新建一个数据集类，并且需要�
 
         self.get_label_map()
         if self.mode == "train":
-            dir = os.path.join(os.path.join(dir, "train"), self.mode)
+            dir = os.path.join(dir, self.mode)
             for file in os.listdir(dir):  # 遍历dir文件夹
                 for imgpath in os.listdir(os.path.join(dir, file)):
                     self.list_img.append(os.path.join(os.path.join(dir, file), imgpath))  # 将图片路径和文件名添加至image list
@@ -68,11 +68,24 @@ class ImageNetCustom(data.Dataset):  # 新建一个数据集类，并且需要�
         count = 0
         with open(os.path.join(self.dir, "LOC_synset_mapping.txt")) as f:
             for eachlabel in f:
-                line_list = eachlabel.strip("\n").split(",")
-                label = line_list[0].split(" ")[0]
+                eachlabel = eachlabel.strip()
+                if not eachlabel:
+                    continue # 如果是空行，则跳过
+                line_list = eachlabel.split(",")
+
+                # 2. 增加健壮性：检查分割后的列表是否符合预期
+                parts = line_list[0].split(" ")
+                if len(parts) < 2:
+                    # 如果格式不对（比如 'n01558993' 和 'robin' 之间没有空格），也跳过
+                    continue
+
+                label = parts[0]
+                category_name = parts[1]
+                
                 self.idx2label[count] = label
                 count += 1
-                self.label2category[label].append(line_list[0].split(" ")[1])
+                
+                self.label2category[label].append(category_name)
                 for index in range(1, len(line_list)):
                     self.label2category[label].append(line_list[index].strip(" "))
         self.label2idx = {value: key for key, value in self.idx2label.items()}
@@ -98,10 +111,5 @@ if __name__ == "__main__":
     train_dataset, val_dataset = torch.utils.data.random_split(train_data, [train_size, test_size])
 
     for data in train_dataset:
-        if data[0].shape[0] == 1:
-            print(1)
-        elif data[0].shape[0] == 4:
-            print(4)
-        else:
-            pass
+        print(data[0].shape, data[1])
 
