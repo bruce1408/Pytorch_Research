@@ -64,3 +64,5 @@ onnx_model_convert_onnxSimplify.py
 
 cifar-10-batches-py/
 events.*
+*.pdf
+MNIST/*
