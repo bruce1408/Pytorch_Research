@@ -20,7 +20,7 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
-from ImageNetCustom import ImageNetCustom
+from data_05_ImageNetCustom import ImageNetCustom
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -40,7 +40,7 @@ parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=64, type=int,
+parser.add_argument('-b', '--batch-size', default=128, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
@@ -230,30 +230,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
         val_dataset = datasets.FakeData(50000, (3, 224, 224), 1000, transforms.ToTensor())
     else:
-        # traindir = os.path.join(args.data, 'train')
-        # valdir = os.path.join(args.data, 'val')
-        # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                                  std=[0.229, 0.224, 0.225])
-        #
-        # train_dataset = datasets.ImageFolder(
-        #     traindir,
-        #     transforms.Compose([
-        #         transforms.RandomResizedCrop(224),
-        #         transforms.RandomHorizontalFlip(),
-        #         transforms.ToTensor(),
-        #         normalize,
-        #     ]))
-        #
-        # val_dataset = datasets.ImageFolder(
-        #     valdir,
-        #     transforms.Compose([
-        #         transforms.Resize(256),
-        #         transforms.CenterCrop(224),
-        #         transforms.ToTensor(),
-        #         normalize,
-        #     ]))
         path = "/DataVault/datasets/imagenet"
-        # writer = SummaryWriter(args.model_name + '_2logs')
         IMAGE_SIZE = 224
         dataTransform = transforms.Compose([
             transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),  # 尺寸变化
@@ -261,25 +238,23 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor()  # 归一化
         ])
 
-        train_data = ImageNetCustom("train", path, dataTransform)
-        train_size = int(0.8 * len(train_data))
-        test_size = len(train_data) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(train_data, [train_size, test_size])
-
+    # 新的、正确的调用方式:
+    train_dataset = ImageNetCustom(root_dir=f"{path}/train", transform=dataTransform)
+    
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False, drop_last=True)
     else:
         train_sampler = None
-        val_sampler = None
-
+        
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+        train_dataset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.workers, pin_memory=True)
+    
+    val_dataset = ImageNetCustom(root_dir=f"{path}/val", transform=dataTransform)
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True, sampler=val_sampler)
+        num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)
@@ -338,7 +313,7 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args):
 
         # compute
         output = model(images)
-        target = target.squeeze(1)
+        # target = target.squeeze(1)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
