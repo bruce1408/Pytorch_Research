@@ -15,13 +15,13 @@ import torch.optim as optim
 # import os
 # os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1, 2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
 # BERT Parameters
 maxlen = 30     # 同一个batch里面所有的样本长度都必须是相同的
-batch_size = 6  # 最多预测的mask个单词，因为15%的话，如果长度是100个词，可能会有很多mask，15个，这里设定max_pred之后会少很多
+batch_size = 32  # 最多预测的mask个单词，因为15%的话，如果长度是100个词，可能会有很多mask，15个，这里设定max_pred之后会少很多
 max_pred = 5    # max tokens of prediction
 n_layers = 6    # encoder layer 层数
 n_heads = 12    # 多少个head

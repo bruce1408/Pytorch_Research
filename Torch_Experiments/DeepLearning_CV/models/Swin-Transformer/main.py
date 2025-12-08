@@ -13,7 +13,7 @@ import argparse
 import datetime
 import numpy as np
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3,4,5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist

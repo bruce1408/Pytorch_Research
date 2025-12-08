@@ -1,6 +1,6 @@
 import os
 from importlib import import_module
-os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import numpy as np
 import random, time
 from sklearn import metrics
