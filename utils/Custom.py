@@ -47,4 +47,5 @@ class CustomData(data.Dataset):
 
 
 if __name__ == '__main__':
-    trainset = CustomData('../../Dataset/dogs_cats/train', transform=None)
+    trainset = CustomData('/home/bruce_ultra/workspace/Research_Experiments/cat_dog/train', 
+                          transform=None)

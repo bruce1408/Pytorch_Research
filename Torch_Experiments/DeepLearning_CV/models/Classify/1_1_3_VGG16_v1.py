@@ -3,11 +3,11 @@ import torch
 import torch.nn as tnn
 import torchvision.datasets as dsets
 import torchvision.transforms as transforms
-from utils.DataSet_train_val_test import CustomData
-import utils.config as config
+from DataSet_train_val_test import CustomData
+import config as config
 
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 BATCH_SIZE = 32
 LEARNING_RATE = 0.01
 EPOCH = 50
@@ -25,8 +25,11 @@ transform = transforms.Compose([
 # trainData = dsets.ImageFolder('/raid/bruce/datasets/dogs_cats/train', transform)
 # testData = dsets.ImageFolder('/raid/bruce/datasets/dogs_cats/train', transform)
 
-trainset = CustomData(f'{config.dogs_cats_dataset_path}/train', transform=transform)
-valset = CustomData(f'{config.dogs_cats_dataset_path}/train', transform=transform,
+trainset = CustomData(f'{config.dogs_cats_dataset_path}/train', 
+                      transform=transform)
+
+valset = CustomData(f'{config.dogs_cats_dataset_path}/test1',
+                    transform=transform,
                     train=False,
                     val=True,
                     test=False,

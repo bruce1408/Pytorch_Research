@@ -1,0 +1,1 @@
+dogs_cats_dataset_path = "/home/bruce_ultra/workspace/Research_Experiments/cat_dog"

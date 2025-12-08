@@ -14,7 +14,7 @@ num_workers = 2
 batchsize = 64
 epochs = 20
 lr = 0.001
-os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 
 transform_train = transforms.Compose([
     transforms.Resize((256, 256)),
@@ -30,8 +30,8 @@ transform_val = transforms.Compose([
     transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
 ])
 
-trainset = CustomData('/raid/bruce/datasets/dogs_cats/train', transform=transform_train)
-valset = CustomData('/raid/bruce/datasets/dogs_cats/train', transform=transform_val)
+trainset = CustomData('/home/bruce_ultra/workspace/Research_Experiments/cat_dog/train', transform=transform_train)
+valset = CustomData('/home/bruce_ultra/workspace/Research_Experiments/cat_dog/test1', transform=transform_val)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=batchsize, shuffle=True, num_workers=num_workers)
 valloader = torch.utils.data.DataLoader(valset, batch_size=batchsize, shuffle=False, num_workers=num_workers)
 

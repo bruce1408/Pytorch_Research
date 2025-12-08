@@ -63,3 +63,4 @@ onnx_model_convert_onnxSimplify.py
 *.xlsx
 
 cifar-10-batches-py/
+events.*

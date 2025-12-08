@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import *
 import torchvision.transforms as transforms
 
 # parameters
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 batchsize = 32
 num_workers = 4
 
@@ -68,8 +68,8 @@ transform_val = transforms.Compose([
 ])
 
 # 生成训练集和验证集
-trainset = CustomData('/raid/bruce/datasets/dogs_cats/train', transform=transform_train)
-valset = CustomData('/raid/bruce/datasets/dogs_cats/train', transform=transform_val, train=False, val=True)
+trainset = CustomData('/home/bruce_ultra/workspace/Research_Experiments/cat_dog/train', transform=transform_train)
+valset = CustomData('/home/bruce_ultra/workspace/Research_Experiments/cat_dog/test1', transform=transform_val, train=False, val=True)
 # 将训练集和验证集放到 DataLoader 中去，shuffle 进行打乱顺序（在多个 epoch 的情况下）
 # num_workers 加载数据用多少的子线程（windows不能用这个参数）
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=batchsize, shuffle=True, num_workers=num_workers)
@@ -111,7 +111,9 @@ def train(epoch):
         loss.backward()
         optimizer.step()
         train_acc = get_acc(out, label)
-        print("Epoch:%d [%d|%d] loss:%f acc:%f" % (epoch, batch_idx, len(trainloader), loss.mean(), train_acc))
+        
+        if batch_idx % 10 == 0:
+            print("\rEpoch:%d [%d|%d] loss:%f acc:%f" % (epoch, batch_idx, len(trainloader), loss.mean(), train_acc))
 
 
 def val(epoch):
@@ -131,7 +133,10 @@ def val(epoch):
 
             total += image.size(0)
             correct += predicted.data.eq(label.data).cpu().sum()
-            print("Epoch:%d [%d|%d] total:%d correct:%d" % (epoch, batch_idx, len(valloader), total, correct.numpy()))
+            
+            if batch_idx % 100 == 0:
+                print("Epoch:%d [%d|%d] total:%d correct:%d" % (epoch, batch_idx, len(valloader), total, correct.numpy()))
+    
     print("Acc: %f " % ((1.0 * correct.numpy()) / total))
 
 
@@ -146,4 +151,4 @@ if __name__ == '__main__':
     for epoch in range(20):
         train(epoch)
         val(epoch)
-    torch.save(model, 'modelcatdog.pt')  # 保存模型
+    torch.save(model, 'model_cat_dog.pt')  # 保存模型

@@ -6,9 +6,14 @@ from PIL import Image
 import torch.utils.data as data
 import torchvision.transforms as transforms
 
-
 class CustomData(data.Dataset):
-    def __init__(self, imgFolder, transform=None, train=True, val=False, test=False, splitnum=0.8):
+    def __init__(self, imgFolder, 
+                 transform=None, 
+                 train=True, 
+                 val=False, 
+                 test=False, 
+                 splitnum=0.8):
+        
         self.train = train
         self.val = val
         self.test = test
@@ -38,5 +43,5 @@ class CustomData(data.Dataset):
 
 
 if __name__ == '__main__':
-    data = CustomData('/raid/bruce/datasets/dogs_cats/train')
+    data = CustomData('/home/bruce_ultra/workspace/Research_Experiments/cat_dog/train')
     print(data[0])

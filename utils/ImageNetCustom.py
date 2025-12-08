@@ -32,7 +32,7 @@ class ImageNetCustom(data.Dataset):  # 新建一个数据集类，并且需要�
 
         self.get_label_map()
         if self.mode == "train":
-            dir = os.path.join(os.path.join(dir, "ILSVRC/Data/CLS-LOC"), self.mode)
+            dir = os.path.join(os.path.join(dir, "train"), self.mode)
             for file in os.listdir(dir):  # 遍历dir文件夹
                 for imgpath in os.listdir(os.path.join(dir, file)):
                     self.list_img.append(os.path.join(os.path.join(dir, file), imgpath))  # 将图片路径和文件名添加至image list
@@ -40,7 +40,7 @@ class ImageNetCustom(data.Dataset):  # 新建一个数据集类，并且需要�
                     name = imgpath.split(sep='_')[0]
                     self.list_label.append(self.label2idx[name])
         elif self.mode == "val":
-            dir = os.path.join(os.path.join(dir, "ILSVRC/Data/CLS-LOC"), self.mode)
+            dir = os.path.join(os.path.join(dir, "val"), self.mode)
             for imgpath in os.listdir(dir):
                 self.list_img.append(os.path.join(dir, imgpath))  # 将图片路径和文件名添加至image list
                 self.data_size += 1  # 数据集增1
@@ -80,8 +80,8 @@ class ImageNetCustom(data.Dataset):  # 新建一个数据集类，并且需要�
 
 
 if __name__ == "__main__":
-    path = "/data/cdd_data/imagenet_data"
-    "/data/cdd_data/imagenet_data/ILSVRC/Data/CLS-LOC"
+    path = "/DataVault/datasets/imagenet"
+    # "/data/cdd_data/imagenet_data/ILSVRC/Data/CLS-LOC"
     # data = ImageNetCustom("train", path, dataTransform=dataTransform)
     # print(data.label2idx)
     # print(data.list_label.__len__())

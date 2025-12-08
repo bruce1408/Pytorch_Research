@@ -4,6 +4,7 @@ import random
 import shutil
 import time
 import warnings
+import torch
 from enum import Enum
 import sys
 sys.path.append("../..")
@@ -12,7 +13,6 @@ from torch.utils.tensorboard import SummaryWriter
 # from tensorboardX import GlobalSummaryWriter as SummaryWriter
 from torch.cuda.amp import autocast as autocast
 from utils.ImageNetCustom import ImageNetCustom
-import torch
 from utils.logger import Logger
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -49,7 +49,7 @@ parser.add_argument('-j', '--workers', default=6, type=int, metavar='N',
 parser.add_argument('--epochs', default=30, type=int, metavar='N',
                     help='number of total epochs to run')
 
-parser.add_argument("--path", default="/home/cuidongdong/imagenet_data")
+parser.add_argument("--path", default="/DataVault/datasets/imagenet")
 
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')

@@ -60,6 +60,6 @@ class Custom(data.Dataset):
 
 
 if __name__ == '__main__':
-    data = Custom('train', '../../Dataset/dogs_cats/')
+    data = Custom('train', '/home/bruce_ultra/workspace/Research_Experiments/cat_dog/')
     print(data.__len__())
-    print(data[0])
+    print(data[0][0].shape)

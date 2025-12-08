@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.utils.data
 import torch.nn.functional as F
 from torchsummary import summary
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 """
 pytorch 官方实现分类模型代码汇总
 https://pytorch.org/docs/stable/torchvision/models.html

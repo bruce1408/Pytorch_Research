@@ -5,9 +5,15 @@ from PIL import Image
 import torch.utils.data as data
 import torchvision.transforms as transforms
 
-
-class CustomData(data.dataset):
-    def __init__(self, imgFolder, train=True, val=False, test=False, transform=None, splitnum=0.8):
+class CustomData(data.Dataset):
+    def __init__(self, 
+                 imgFolder, 
+                 train=True, 
+                 val=False, 
+                 test=False, 
+                 transform=None, 
+                 splitnum=0.8):
+        
         self.train = train
         self.val = val
         self.test = test
@@ -15,8 +21,11 @@ class CustomData(data.dataset):
         imgs = [os.path.join(imgFolder, imgFile) for imgFile in os.listdir(imgFolder)]
         self.imgnum = len(imgs)
         self.imgs = sorted(imgs, key=lambda x: int(x.split('.')[-2]))
+        
+        split_point = int(splitnum * self.imgnum)
+        print(split_point)
         if train:
-            self.imgs = imgs[:, int(splitnum * self.imgnum)]
+            self.imgs = imgs[:split_point]
         elif val:
             self.imgs = imgs[int(splitnum * self.imgnum):]
         else:

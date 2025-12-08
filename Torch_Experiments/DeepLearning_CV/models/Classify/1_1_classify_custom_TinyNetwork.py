@@ -3,15 +3,17 @@ import sys
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
+# sys.path.append("../..")
 # from torchsummary import summary
 # from dataset.Custom import CustomData
-from CV.utils.DataSet_train_val_test import CustomData
-from CV.utils.ResNet import ResNet50
+from utils.DataSet_train_val_test import CustomData
+from torchvision.models import resnet50, ResNet50_Weights
+# from utils.ResNet import ResNet50
 
 # from utils.Custom import CustomData
 
 # parameters
-os.environ["CUDA_VISIBLE_DEVICES"] = '1, 2, 3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 save_path = "./self_resnet50.pt"
 gamma = 0.96
 num_workers = 4
@@ -138,7 +140,8 @@ def val(model, epoch):
 if __name__ == '__main__':
     # model = Net()
     # model = Inception_v1(num_classes=2)
-    model = ResNet50([3, 4, 6, 3], num_classes=2).cuda()
+    # model = ResNet50([3, 4, 6, 3], num_classes=2).cuda()
+    model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2).cuda()
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma, last_epoch=-1)
     criterion = nn.CrossEntropyLoss()
