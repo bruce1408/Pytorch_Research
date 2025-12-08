@@ -3,21 +3,16 @@ import sys
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-# sys.path.append("../..")
-# from torchsummary import summary
-# from dataset.Custom import CustomData
-from utils.DataSet_train_val_test import CustomData
+from data_02_dog_cat import CustomData
 from torchvision.models import resnet50, ResNet50_Weights
-# from utils.ResNet import ResNet50
-
-# from utils.Custom import CustomData
+from model_resnet_v1 import ResNet50
 
 # parameters
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 save_path = "./self_resnet50.pt"
 gamma = 0.96
-num_workers = 4
-batchsize = 32  # batch_size 不要太大
+num_workers = 8
+batchsize = 128  # batch_size 不要太大
 epochs = 10
 learning_rate = 0.01
 
@@ -38,15 +33,17 @@ transform_val = transforms.Compose([
     transforms.Normalize(mean, std),
 ])
 
-trainset = CustomData('/home/cuidongdong/data/dogs_cats/train', transform=transform_train)
-valset = CustomData('/home/cuidongdong/data/dogs_cats/train', transform=transform_val,
-                    train=False,
-                    val=True,
-                    test=False,
-                    splitnum=0.8)
+print("--- 正在创建数据集 ---")
+dataset_root = '/home/bruce_ultra/workspace/Research_Experiments/cat_dog/'
+
+# 创建训练集实例
+trainset = CustomData(root_dir=dataset_root, transform=transform_train, mode='train', split_ratio=0.8)
+
+# 创建验证集实例
+valset = CustomData(root_dir=dataset_root, transform=transform_val, mode='val', split_ratio=0.8)
 
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=batchsize, shuffle=True, num_workers=num_workers)
-valloader = torch.utils.data.DataLoader(valset, batch_size=batchsize, shuffle=True, num_workers=num_workers)
+valloader = torch.utils.data.DataLoader(valset, batch_size=batchsize, shuffle=False, num_workers=num_workers) # 验证集通常不需要 shuffle
 
 
 class Net(nn.Module):
@@ -95,19 +92,23 @@ def train(model, epoch):
     for batch_idx, (img, label) in enumerate(trainloader):
         image = img.cuda()
         label = label.cuda()
+        
         optimizer.zero_grad()
         out = model(image)
-        # print('the out shape is: ', out.shape)
-        # print(a1.shape, a2.shape, out.shape)
         loss = criterion(out, label)
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
-        scheduler.step()
-        # 显示进度条的另外一种写法, lambda 是str连接起来的
-        sys.stdout.write('\033[1;36m \r>>Train Epoch:%d [%d|%d] loss:%f, lr:%f \033[0m' %
-                         (epoch, batch_idx, len(trainloader), loss.mean(), scheduler.get_lr()[0]))
+        
+        current_lr = scheduler.get_last_lr()[0]
+
+        # 显示进度条的另外一种写法, 带颜色的写法， lambda 是str连接起来的
+        # sys.stdout.write('\033[1;36m \r>>Train Epoch:%d [%d|%d] loss:%f, lr:%f \033[0m' %
+                        #  (epoch, batch_idx, len(trainloader), loss.mean(), scheduler.get_lr()[0]))
+
+        sys.stdout.write('\033[1;36m \r>>Train Epoch:%d [%d|%d] loss:%.6f, lr:%.6f \033[0m' %
+                         (epoch, batch_idx, len(trainloader), loss.mean(), current_lr))
 
         # print('\r Test %s: %f   ***  %s: %f' % (blue('Accuracy'), epoch, blue('Best Accuracy'), batch_idx))\
         # sys.stdout.write("\r train Epoch: %d [%d|%d] loss:%f, lr:%f " % (epoch, batch_idx, len(trainloader), loss.mean(),
@@ -138,14 +139,12 @@ def val(model, epoch):
 
 
 if __name__ == '__main__':
-    # model = Net()
+    model = Net().cuda()
     # model = Inception_v1(num_classes=2)
-    # model = ResNet50([3, 4, 6, 3], num_classes=2).cuda()
-    model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2).cuda()
+    model = ResNet50([3, 4, 6, 3], num_classes=2).cuda()
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma, last_epoch=-1)
-    criterion = nn.CrossEntropyLoss()
-    criterion.cuda()
+    criterion = nn.CrossEntropyLoss().cuda()
 
     # ============ model structure ===========
     # print(model)
@@ -154,11 +153,11 @@ if __name__ == '__main__':
     # else:
     #     summary(model, (3, 224, 224))
     # ============= load the model ============
-    if os.path.exists(save_path):
-        model.load_state_dict(torch.load(save_path))
-        print("======== load the model from %s ========" % save_path)
-    else:
-        print("======== train the net from srcatch ==========")
+    # if os.path.exists(save_path):
+    #     model.load_state_dict(torch.load(save_path))
+    #     print("======== load the model from %s ========" % save_path)
+    # else:
+    #     print("======== train the net from srcatch ==========")
     # ============ train the model =============
     for epoch in range(epochs):
         train(model, epoch)

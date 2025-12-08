@@ -185,4 +185,5 @@ class Inception_v1(nn.Module):
 
 if __name__ == '__main__':
     net = Inception_v1(10)
+    net.cuda()
     summary(net, (3, 224, 224))

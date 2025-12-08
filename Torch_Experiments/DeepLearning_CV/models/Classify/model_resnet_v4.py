@@ -7,7 +7,7 @@ from CV.utils.dog_cat import DogCat
 
 import torch.utils.data as data
 # from utils.inception_advance import Inception_v1
-from CV.utils.ResNet import ResNet50
+from model_resnet_v1 import ResNet50
 
 # parameters
 os.environ['CUDA_VISIBLES_DEVICES'] = '2, 3'

@@ -50,7 +50,7 @@ class Bottleneck(nn.Module):
 
         x_shortCut = x
         out = self.bottleneck(x)
-        print(out.shape, x.shape)
+        # print(out.shape, x.shape)
 
         if self.downsampling:
             x_shortCut = self.downsample(x)
