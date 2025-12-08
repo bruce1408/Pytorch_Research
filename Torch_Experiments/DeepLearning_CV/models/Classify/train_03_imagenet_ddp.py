@@ -7,13 +7,12 @@ import warnings
 import torch
 from enum import Enum
 import sys
-sys.path.append("../..")
 from torch.utils.tensorboard import SummaryWriter
 # from tensorboardX import SummaryWriter
 # from tensorboardX import GlobalSummaryWriter as SummaryWriter
 from torch.cuda.amp import autocast as autocast
-from utils.ImageNetCustom import ImageNetCustom
-from utils.logger import Logger
+from data_05_ImageNetCustom import ImageNetCustom
+# from utils.logger import Logger
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -107,8 +106,8 @@ args = parser.parse_args()
 gpu_devices = ','.join([str(id) for id in args.gpu_devices])
 os.environ["CUDA_VISIBLE_DEVICES"] = gpu_devices
 os.makedirs(os.path.join(args.arch, args.work_dir), exist_ok=True)
-log = Logger(os.path.join(os.path.join(args.arch, args.work_dir),
-                          'torchvision_imagenet_%s.log' % args.arch), level='info')
+# log = Logger(os.path.join(os.path.join(args.arch, args.work_dir),
+#                           'torchvision_imagenet_%s.log' % args.arch), level='info')
 
 
 def get_acc(pred, label):
@@ -315,14 +314,17 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor()  # 归一化
         ])
 
-        train_data = ImageNetCustom("train", args.path, dataTransform)
-        train_size = int(0.8 * len(train_data))
-        test_size = len(train_data) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(train_data, [train_size, test_size])
+        train_dataset = ImageNetCustom(root_dir=f"{args.path}/train", transform=dataTransform)
+        val_dataset = ImageNetCustom(root_dir=f"{args.path}/val", transform=dataTransform)
+        
+        # train_data = ImageNetCustom("train", args.path, dataTransform)
+        # train_size = int(0.8 * len(train_data))
+        
+        # test_size = len(train_data) - train_size
+        # train_dataset, val_dataset = torch.utils.data.random_split(train_data, [train_size, test_size])
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        # val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False, drop_last=True)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
     else:
         train_sampler = None
