@@ -52,7 +52,7 @@ parser.add_argument("--path", default="/DataVault/datasets/imagenet")
 
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=128, type=int,
+parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
@@ -351,7 +351,8 @@ def main_worker(gpu, ngpus_per_node, args):
         epoch_time = time.time()
         train(train_loader, model, criterion, optimizer, epoch, device, args, writer, scheduler)
         if dist.get_rank() == 0:
-            log.logger.info("epoch_time cost: %s" % str(time.time() - epoch_time))
+            # log.logger.info("epoch_time cost: %s" % str(time.time() - epoch_time))
+            print("epoch_time cost: %s" % str(time.time() - epoch_time))
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
@@ -373,7 +374,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 'scheduler': scheduler.state_dict()
             }, is_best, args)
     if dist.get_rank() == 0:
-        log.logger.info("train cost time is: %s" % (str(time.time() - training_time)))
+        # log.logger.info("train cost time is: %s" % (str(time.time() - training_time)))
+        print("train cost time is: %s" % (str(time.time() - training_time)))
 
 def train(train_loader, model, criterion, optimizer, epoch, device, args, writer, scheduler):
     batch_time = AverageMeter('Batch_Time', ':6.3f')
@@ -402,7 +404,7 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args, writer
         # compute
         output = model(images)
         totalCount += 1
-        target = target.squeeze(1)
+        # target = target.squeeze(1)
         loss = criterion(output, target)
         writer.add_scalar("loss", loss, totalCount)
         acc = get_acc(output, target)
@@ -579,12 +581,13 @@ class ProgressMeter(object):
         entries += [str(meter) for meter in self.meters]
         # print('\t'.join(entries))
         # log.logger.info('\t'.join(entries))
-        log.logger.info(' '.join(entries))
+        # log.logger.info(' '.join(entries))
+        print(' '.join(entries))
 
     def display_summary(self):
         entries = ["val: *"]
         entries += [meter.summary() for meter in self.meters]
-        log.logger.info(' '.join(entries))
+        print(' '.join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))
