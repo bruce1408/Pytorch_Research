@@ -37,7 +37,7 @@ def benchmark_model():
     try:
         model = models.__dict__[CONFIG['MODEL_NAME']](weights='IMAGENET1K_V1')
     except KeyError:
-        print_colored(f"Error: Model {CONFIG['MODEL_NAME']} not found in torchvision.", "red")
+        print_colored_text(f"Error: Model {CONFIG['MODEL_NAME']} not found in torchvision.", "red")
         return
 
     model.to(device)
