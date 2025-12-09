@@ -18,8 +18,8 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-from apex import amp
-from apex.parallel import DistributedDataParallel
+import torch.cuda.amp as amp
+from torch.nn.parallel import DistributedDataParallel 
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -28,7 +28,7 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--data',
                     metavar='DIR',
-                    default='/home/cuidongdong/imagenet_data/ILSVRC/Data/CLS-LOC',
+                    default='/DataVault/datasets/imagenet',
                     help='path to dataset')
 parser.add_argument('-a',
                     '--arch',
@@ -98,7 +98,7 @@ parser.add_argument('--wd',
                     metavar='W',
                     help='weight decay (default: 1e-4)',
                     dest='weight_decay')
-parser.add_argument("--work-dir", default="outputs")
+parser.add_argument("--work-dir", default="/home/bruce_ultra/workspace/Research_Experiments/outputs")
 parser.add_argument('-p',
                     '--print-freq',
                     default=10,
@@ -234,8 +234,7 @@ class data_prefetcher():
 
 
 args = parser.parse_args()
-log = Logger(os.path.join(os.path.join(args.arch, args.work_dir),
-                              'torchvision_imagenet_%s.log' % args.arch), level='info')
+log = Logger(os.path.join(args.work_dir, 'torchvision_imagenet_%s.log' % args.arch), level='info')
 
 def main():
     args = parser.parse_args()
@@ -273,7 +272,8 @@ def main_worker(local_rank, nprocs, args):
     torch.cuda.set_device(local_rank)
     model.cuda()
     # When using a single GPU per process and per
-    # DistributedDataParallel, we need to divide the batch size
+    # 
+    # , we need to divide the batch size
     # ourselves based on the total number of GPUs we have
     args.batch_size = int(args.batch_size / nprocs)
 
@@ -285,9 +285,9 @@ def main_worker(local_rank, nprocs, args):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
-    model, optimizer = amp.initialize(model, optimizer)
+    # model, optimizer = amp.initialize(model, optimizer)
+    scaler = amp.GradScaler()
     model = DistributedDataParallel(model)
-
     cudnn.benchmark = True
 
     # Data loading code
@@ -327,10 +327,10 @@ def main_worker(local_rank, nprocs, args):
             transforms.ToTensor(),
             normalize,
         ])),
-                                             batch_size=args.batch_size,
-                                             shuffle=False,
-                                             num_workers=0,
-                                             pin_memory=True)
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=True)
 
     if args.evaluate:
         validate(val_loader, model, criterion, local_rank, args)
@@ -342,7 +342,7 @@ def main_worker(local_rank, nprocs, args):
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, local_rank,
-              args)
+              args, scaler)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, local_rank, args)
@@ -361,7 +361,7 @@ def main_worker(local_rank, nprocs, args):
                 }, is_best)
 
 
-def train(train_loader, model, criterion, optimizer, epoch, local_rank, args):
+def train(train_loader, model, criterion, optimizer, epoch, local_rank, args, scaler):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -382,28 +382,19 @@ def train(train_loader, model, criterion, optimizer, epoch, local_rank, args):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        # compute output
-        output = model(images)
-        loss = criterion(output, target)
-
-        # measure accuracy and record loss
-        # acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
-        torch.distributed.barrier()
-
-        reduced_loss = reduce_mean(loss, args.nprocs)
-        # reduced_acc1 = reduce_mean(acc1, args.nprocs)
-        # reduced_acc5 = reduce_mean(acc5, args.nprocs)
-
-        losses.update(reduced_loss.item(), images.size(0))
-        # top1.update(reduced_acc1.item(), images.size(0))
-        # top5.update(reduced_acc5.item(), images.size(0))
-
-        # compute gradient and do SGD step
         optimizer.zero_grad()
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-        optimizer.step()
+
+        # compute output
+        with amp.autocast():
+            output = model(images)
+            loss = criterion(output, target)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        torch.distributed.barrier()
+        reduced_loss = reduce_mean(loss, args.nprocs)
+        losses.update(reduced_loss.item(), images.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -411,9 +402,7 @@ def train(train_loader, model, criterion, optimizer, epoch, local_rank, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
-
         i += 1
-
         images, target = prefetcher.next()
 
 
@@ -425,23 +414,20 @@ def validate(val_loader, model, criterion, local_rank, args):
     progress = ProgressMeter(len(val_loader), [batch_time, losses, top1, top5],
                              prefix='Test: ')
 
-    # switch to evaluate mode
     model.eval()
-
     with torch.no_grad():
         end = time.time()
         prefetcher = data_prefetcher(val_loader)
         images, target = prefetcher.next()
         i = 0
+        
         while images is not None:
-
             # compute output
             output = model(images)
             loss = criterion(output, target)
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
             torch.distributed.barrier()
 
             reduced_loss = reduce_mean(loss, args.nprocs)
@@ -455,12 +441,9 @@ def validate(val_loader, model, criterion, local_rank, args):
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
-
             if i % args.print_freq == 0:
                 progress.display(i)
-
             i += 1
-
             images, target = prefetcher.next()
 
         # TODO: this should also be done with the ProgressMeter

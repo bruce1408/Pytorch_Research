@@ -1,7 +1,7 @@
 import os
 import torch
 import onnx
-os.environ['CUDA_VISIBLE_DEVICES'] = "6"
+os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 from mmdet.models.backbones.resnet import Bottleneck, BasicBlock
 import torch.utils.checkpoint as checkpoint
 import torchvision.datasets as datasets
@@ -116,7 +116,6 @@ class FPN_LSS(nn.Module):
 
 if __name__ == "__main__":
     net = ResNetForBEVDet(numC_input=3)
-    # train_dataset = datasets.FakeData(2, (3, 224, 224), 100, transforms.ToTensor())
     traindata = torch.randn([1, 3, 224, 224])
     # print(traindata)
     outputs = net(traindata)

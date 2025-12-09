@@ -2,7 +2,11 @@ import torch
 import time
 import random
 import numpy as np
-from efficientnet_pytorch import EfficientNet
+import torchvision.models as models
+
+# from efficientnet_pytorch import EfficientNet
+
+MODEL_NAME = 'resnet50'
 
 def randomSeed(SEED):
    random.seed(SEED)
@@ -13,8 +17,7 @@ def randomSeed(SEED):
 
 
 randomSeed(0)
-
-model = EfficientNet.from_pretrained('efficientnet-b3')
+model = models.__dict__[MODEL_NAME](weights='IMAGENET1K_V1')
 device = torch.device('cuda')
 model.to(device)
 dummy_input = torch.randn(1, 3, 300, 300, dtype=torch.float).to(device)

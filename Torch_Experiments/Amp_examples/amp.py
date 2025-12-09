@@ -17,9 +17,10 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-
-from apex import amp
-from apex.parallel import DistributedDataParallel
+import torch.cuda.amp as amp
+# from apex import amp
+# from apex.parallel import DistributedDataParallel
+from torch.nn.parallel import DistributedDataParallel 
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -28,7 +29,7 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--data',
                     metavar='DIR',
-                    default='/home/cuidongdong/imagenet_data/ILSVRC/Data/CLS-LOC',
+                    default='/DataVault/datasets/imagenet',
                     help='path to dataset')
 parser.add_argument('-a',
                     '--arch',
@@ -184,10 +185,6 @@ class data_prefetcher():
                                   0.406 * 255]).cuda().view(1, 3, 1, 1)
         self.std = torch.tensor([0.229 * 255, 0.224 * 255,
                                  0.225 * 255]).cuda().view(1, 3, 1, 1)
-        # With Amp, it isn't necessary to manually convert data to half.
-        # if args.fp16:
-        #     self.mean = self.mean.half()
-        #     self.std = self.std.half()
         self.preload()
 
     def preload(self):
@@ -197,27 +194,10 @@ class data_prefetcher():
             self.next_input = None
             self.next_target = None
             return
-        # if record_stream() doesn't work, another option is to make sure device inputs are created
-        # on the main stream.
-        # self.next_input_gpu = torch.empty_like(self.next_input, device='cuda')
-        # self.next_target_gpu = torch.empty_like(self.next_target, device='cuda')
-        # Need to make sure the memory allocated for next_* is not still in use by the main stream
-        # at the time we start copying to next_*:
-        # self.stream.wait_stream(torch.cuda.current_stream())
+        
         with torch.cuda.stream(self.stream):
             self.next_input = self.next_input.cuda(non_blocking=True)
             self.next_target = self.next_target.cuda(non_blocking=True)
-            # more code for the alternative if record_stream() doesn't work:
-            # copy_ will record the use of the pinned source tensor in this side stream.
-            # self.next_input_gpu.copy_(self.next_input, non_blocking=True)
-            # self.next_target_gpu.copy_(self.next_target, non_blocking=True)
-            # self.next_input = self.next_input_gpu
-            # self.next_target = self.next_target_gpu
-
-            # With Amp, it isn't necessary to manually convert data to half.
-            # if args.fp16:
-            #     self.next_input = self.next_input.half()
-            # else:
             self.next_input = self.next_input.float()
             self.next_input = self.next_input.sub_(self.mean).div_(self.std)
 
@@ -234,8 +214,8 @@ class data_prefetcher():
 
 
 args = parser.parse_args()
-log = Logger(os.path.join(os.path.join(args.arch, args.work_dir),
-                              'torchvision_imagenet_%s.log' % args.arch), level='info')
+# log = Logger(os.path.join(os.path.join(args.arch, args.work_dir),
+                            #   'torchvision_imagenet_%s.log' % args.arch), level='info')
 
 def main():
     args = parser.parse_args()
@@ -276,16 +256,13 @@ def main_worker(local_rank, nprocs, args):
     # DistributedDataParallel, we need to divide the batch size
     # ourselves based on the total number of GPUs we have
     args.batch_size = int(args.batch_size / nprocs)
-
-    # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
-
     optimizer = torch.optim.SGD(model.parameters(),
                                 args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
-    model, optimizer = amp.initialize(model, optimizer)
+    scaler = torch.cuda.amp.GradScaler()
     model = DistributedDataParallel(model)
 
     cudnn.benchmark = True
@@ -327,10 +304,10 @@ def main_worker(local_rank, nprocs, args):
             transforms.ToTensor(),
             normalize,
         ])),
-                                             batch_size=args.batch_size,
-                                             shuffle=False,
-                                             num_workers=0,
-                                             pin_memory=True)
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=True)
 
     if args.evaluate:
         validate(val_loader, model, criterion, local_rank, args)
@@ -342,7 +319,7 @@ def main_worker(local_rank, nprocs, args):
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, local_rank,
-              args)
+              args, scaler)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, local_rank, args)
@@ -361,7 +338,7 @@ def main_worker(local_rank, nprocs, args):
                 }, is_best)
 
 
-def train(train_loader, model, criterion, optimizer, epoch, local_rank, args):
+def train(train_loader, model, criterion, optimizer, epoch, local_rank, args, scaler):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -384,8 +361,11 @@ def train(train_loader, model, criterion, optimizer, epoch, local_rank, args):
 
         # compute output
         output = model(images)
-        loss = criterion(output, target)
+        # loss = criterion(output, target)
 
+        with torch.cuda.amp.autocast():  # 开启混合精度上下文
+            output = model(images)
+            loss = criterion(output, target)
         # measure accuracy and record loss
         # acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
@@ -401,9 +381,12 @@ def train(train_loader, model, criterion, optimizer, epoch, local_rank, args):
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-        optimizer.step()
+        # with amp.scale_loss(loss, optimizer) as scaled_loss:
+        #     scaled_loss.backward()
+        # optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -411,9 +394,7 @@ def train(train_loader, model, criterion, optimizer, epoch, local_rank, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
-
         i += 1
-
         images, target = prefetcher.next()
 
 
@@ -464,9 +445,10 @@ def validate(val_loader, model, criterion, local_rank, args):
             images, target = prefetcher.next()
 
         # TODO: this should also be done with the ProgressMeter
-        log.logger.info(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1,
+        # log.logger.info(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1,
+                                                                    # top5=top5))
+        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1,
                                                                     top5=top5))
-
     return top1.avg
 
 
@@ -509,7 +491,8 @@ class ProgressMeter(object):
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
-        log.logger.info('\t'.join(entries))
+        # log.logger.info('\t'.join(entries))
+        print('\t'.join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))

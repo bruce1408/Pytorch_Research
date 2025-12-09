@@ -1,7 +1,9 @@
 import torch
 import numpy as np
 import time
-from efficientnet_pytorch import EfficientNet
+# from efficientnet_pytorch import EfficientNet
+import torchvision.models as models
+
 from spectrautils.print_utils import *
 
 # ===================================================================
@@ -10,7 +12,7 @@ from spectrautils.print_utils import *
 BATCH_SIZE = 64
 WARMUP_ITER = 50
 TEST_ITER = 100
-MODEL_NAME = 'efficientnet-b0'
+MODEL_NAME = 'resnet50'
 # ===================================================================
 
 
@@ -22,7 +24,7 @@ print(f"Using device: {device}")
 
 
 # 3. 加载预训练模型，并使用 .to(device) 将其移动到目标设备
-model = EfficientNet.from_pretrained(MODEL_NAME)
+model = models.__dict__[MODEL_NAME](weights='IMAGENET1K_V1')
 model.to(device)
 model.eval()
 

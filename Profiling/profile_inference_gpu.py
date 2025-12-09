@@ -8,7 +8,7 @@ from torchvision.models import resnet50
 # from efficientnet_pytorch import EfficientNet
 from torchvision.models import vgg11_bn
 
-os.environ["CUDA_VISIBLE_DEVICES"]="3, 4"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 if __name__ == '__main__':
     # model = EfficientNet.from_pretrained('efficientnet-b3')
