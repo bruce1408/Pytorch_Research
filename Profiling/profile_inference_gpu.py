@@ -3,15 +3,14 @@ import torch
 import time
 import numpy as np
 # from torchvision.models import resnet18
-from torchvision.models import MobileNetV2
 from torchvision.models import resnet50
-# from efficientnet_pytorch import EfficientNet
 from torchvision.models import vgg11_bn
+from torchvision.models import MobileNetV2
+
 
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 if __name__ == '__main__':
-    # model = EfficientNet.from_pretrained('efficientnet-b3')
     # model = resnet18(pretrained=False)
     # model = resnet50(pretrained=False)
     model = vgg11_bn(pretrained=False)
