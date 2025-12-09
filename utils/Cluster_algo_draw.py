@@ -2,7 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.datasets import make_blobs
+from spectrautils.common_utils import enter_workspace
 
+enter_workspace()
 	
 # x1表示生成的样本数据	y1表示样本的标签
 # x1, y1 = make_blobs(n_samples=300, n_features=4, centers=3, random_state=170)
@@ -102,6 +104,8 @@ def showCluster(dataSet,k,centroids,clusterAssment):
         plt.plot(centroids[i,0],centroids[i,1],mark[i])
 
     plt.show()
+    plt.savefig('./cluster.png')
+    plt.close()
     
     
 dataSet = loadDataSet()

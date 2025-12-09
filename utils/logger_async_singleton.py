@@ -35,7 +35,7 @@ class AsyncLoggerManager:
             cls._instance.init_logger(*args, **kwargs)
         return cls._instance
 
-    def init_logger(self, name="QnnHelperLogger", work_dir=None, log_file=None, level=logging.INFO):
+    def init_logger(self, name="demo", work_dir=None, log_file=None, level=logging.INFO):
         if not hasattr(self, "initialized"):
             self.logger = logging.getLogger(name)
             self.logger.setLevel(level)
