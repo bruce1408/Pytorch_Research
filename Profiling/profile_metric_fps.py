@@ -4,7 +4,6 @@ import random
 import numpy as np
 import torchvision.models as models
 
-# from efficientnet_pytorch import EfficientNet
 
 MODEL_NAME = 'resnet50'
 
@@ -70,7 +69,8 @@ def measure_inference_speed(model, data, max_iter=2000, log_interval=50):
    return fps
 
 
-measure_inference_speed(model, (dummy_input,))
+if __name__ == '__main__':
+    measure_inference_speed(model, (dummy_input,))
 
 
 
