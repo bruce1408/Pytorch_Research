@@ -290,7 +290,11 @@ class Decoder(nn.Module):
         
         # 3. 生成解码器自注意力的填充掩码和后续掩码，并合并它们。
         dec_self_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs)
+        
+        # 用于防止解码器在预测时“偷看”未来的信息
         dec_self_attn_subsequent_mask = get_attn_subsequent_mask(dec_inputs)
+        
+        # 最终屏蔽掉padding 和 未来的信息，得到自注意力掩码
         dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequent_mask), 0) # 大于0返回True, 否则返回False
 
         # 4. 生成编码器-解码器注意力的填充掩码。
