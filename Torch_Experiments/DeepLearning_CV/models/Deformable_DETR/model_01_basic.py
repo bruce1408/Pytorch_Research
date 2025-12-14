@@ -174,7 +174,7 @@ class DeformableAttention(nn.Module):
             offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1) # Shape: [L, 2]
             
             # `sampling_locations` = 参考点 + 缩放后的偏移量
-            # 扩展维度以利用广播机制进行计算。
+            # 扩展维度以利用广播机制进行计算。 #TODO 详细解释
             sampling_locations = reference_points[:, :, None, None, None, :] \
                                  + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
         
@@ -327,6 +327,7 @@ class DemoDeformableDETR(nn.Module):
 # 运行演示
 # ==========================================
 if __name__ == "__main__":
+    
     # 模拟输入：3层来自假想 ResNet 的特征图 输入 2, 3, 800, 800
     B = 2
     feats = [
