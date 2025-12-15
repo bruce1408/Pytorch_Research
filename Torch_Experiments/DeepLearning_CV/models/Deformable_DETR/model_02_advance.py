@@ -49,7 +49,7 @@ class PositionEmbeddingSine(nn.Module):
     def forward(self, mask: torch.Tensor):
         assert mask is not None
         # not_mask: 有效点=1, padding=0
-        not_mask = ~mask  # [B,H,W]
+        not_mask = ~mask  # [B,H,W] 都是有效点，没有padding
         y_embed = not_mask.cumsum(1, dtype=torch.float32)  # 对 height 累加
         x_embed = not_mask.cumsum(2, dtype=torch.float32)  # 对 width 累加
 
@@ -381,8 +381,8 @@ class DeformableTransformer(nn.Module):
         reference_points = torch.cat(reference_points_list, 0)  # [Len_in, 2]
         return reference_points
 
-    def forward(self, srcs: List[torch.Tensor],    # 多尺度特征: 每个 [B,C,H_l,W_l]
-                masks: List[torch.Tensor],         # 每层 [B,H_l,W_l] 的 padding mask
+    def forward(self, srcs: List[torch.Tensor],    # 多尺度特征: 每个 [B, C, H_l, W_l]
+                masks: List[torch.Tensor],         # 每层 [B, H_l, W_l] 的 padding mask
                 query_embed: torch.Tensor):        # [N_q, C]
         """
         返回：
@@ -398,8 +398,8 @@ class DeformableTransformer(nn.Module):
         for src, mask in zip(srcs, masks):
             B, C, H, W = src.shape
             spatial_shapes_list.append((H, W))
-            src_flatten.append(src.flatten(2).transpose(1, 2))  # [B,H*W,C]
-            mask_flatten.append(mask.flatten(1))                # [B,H*W]
+            src_flatten.append(src.flatten(2).transpose(1, 2))  # [B, H*W, C]
+            mask_flatten.append(mask.flatten(1))                # [B, H*W]
 
         src_flatten = torch.cat(src_flatten, 1)                 # [B, Len_in, C]
         mask_flatten = torch.cat(mask_flatten, 1)               # [B, Len_in]
@@ -797,8 +797,8 @@ if __name__ == "__main__":
     )
 
     # 2. 构造随机数据的 train/val dataloader
-    train_dataset = RandomDetectionDataset(num_samples=50, num_classes=num_classes, image_size=256)
-    val_dataset = RandomDetectionDataset(num_samples=20, num_classes=num_classes, image_size=256)
+    train_dataset = RandomDetectionDataset(num_samples=50, num_classes=num_classes, image_size=800)
+    val_dataset = RandomDetectionDataset(num_samples=20, num_classes=num_classes, image_size=800)
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=4, shuffle=True, collate_fn=collate_fn
     )

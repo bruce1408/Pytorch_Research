@@ -174,7 +174,7 @@ class DeformableAttention(nn.Module):
             offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1) # Shape: [L, 2]
             
             # `sampling_locations` = 参考点 + 缩放后的偏移量
-            # 扩展维度以利用广播机制进行计算。 #TODO 详细解释
+            # 扩展维度以利用广播机制进行计算。 
             sampling_locations = reference_points[:, :, None, None, None, :] \
                                  + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
         
@@ -196,7 +196,7 @@ class DeformableAttention(nn.Module):
         B, Nq, C = input_flatten.shape[0], sampling_locations.shape[1], input_flatten.shape[2]
         
         # `split` 可以根据每层特征的长度 (H*W)，将扁平的 `input_flatten` 切分成一个列表。
-        input_split = input_flatten.split([h*w for h, w in spatial_shapes], dim=1)
+        input_split = input_flatten.split([h*w for h, w in spatial_shapes], dim=1) # 按照4个level图层分成4个tensor
         
         output = 0
         
@@ -210,15 +210,15 @@ class DeformableAttention(nn.Module):
             grid = 2 * grid - 1
             
             # 3. 调整特征图和网格的维度以适配 `grid_sample` 的多头计算。
-            # 目标特征图形状: [B*Heads, C_head, H, W]
+            # 目标特征图形状: [B*Heads, C_head, H, W] --> [B*Heads, head_dim, H, W] --> [16, 32, 100, 100]
             feat_map_per_head = feat_map.view(B, self.n_heads, self.head_dim, H, W).flatten(0, 1)
             
             # 目标网格形状: [B*Heads, Nq, Points, 2] (H_out=Nq, W_out=Points)
-            grid_per_head = grid.permute(0, 2, 1, 3, 4).flatten(0, 1) 
+            grid_per_head = grid.permute(0, 2, 1, 3, 4).flatten(0, 1)  #[16, 13294, 4, 2]
 
             # 4. 执行双线性插值采样 (Grid Sample)
             # `grid_sample` 会根据 `grid_per_head` 中的坐标，在 `feat_map_per_head` 上采样。
-            # 输出形状: [B*Heads, C_head, Nq, Points]
+            # 输出形状: [B*Heads, head_dims, Nq, Points] --> [16, 32, 13294, 4]
             sampled_feat = F.grid_sample(
                 feat_map_per_head, 
                 grid_per_head, 
@@ -228,13 +228,13 @@ class DeformableAttention(nn.Module):
             # 5. 加权聚合
             # 将采样到的特征 reshape，以便和注意力权重相乘。
             sampled_feat = sampled_feat.view(B, self.n_heads, self.head_dim, Nq, self.n_points)
-            sampled_feat = sampled_feat.permute(0, 3, 1, 4, 2) # -> [B, Nq, Heads, Points, C_head]
+            sampled_feat = sampled_feat.permute(0, 3, 1, 4, 2) # -> [B, Nq, Heads, Points, head_dims]
             
             # 取出该层的注意力权重并扩展维度。
             attn_weights = attention_weights[:, :, :, lvl, :].unsqueeze(-1) # -> [B, Nq, Heads, Points, 1]
             
             # 加权求和 (在采样点维度 `dim=3` 上求和)，并将结果累加到 output。
-            output += (sampled_feat * attn_weights).sum(dim=3) # -> [B, Nq, Heads, C_head]
+            output += (sampled_feat * attn_weights).sum(dim=3) # -> [B, Nq, Heads, head_dims]
 
         # 最终，合并所有注意力头的输出。
         output = output.flatten(2) # -> [B, Nq, Heads*C_head] -> [B, Nq, C]
@@ -285,7 +285,7 @@ class DemoDeformableDETR(nn.Module):
         
         # 3.2 调用核心 Attention
         # Deformable DETR 的 Query 是特征 + 位置编码
-        query = src_flat + pos_flat
+        query = src_flat + pos_flat  # [2, 13294, 256] + [2, 13294, 256]
         
         # Value 是原始的特征
         output = self.deform_attn(
