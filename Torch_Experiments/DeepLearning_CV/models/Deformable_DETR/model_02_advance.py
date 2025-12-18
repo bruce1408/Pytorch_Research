@@ -440,7 +440,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
         # 1) Self-attn：queries 之间互相看（不看图）
         # 1. Self-Attention (在 object queries 之间)
         q = k = tgt + query_pos
-        self_attn_out, _ = self.self_attn(q, k, value=tgt)
+        self_attn_out, _ = self.self_attn(q, k, value=tgt) # [4, 50, 256]
         
         # Add & Norm
         tgt = tgt + self.dropout1(self_attn_out)
@@ -454,7 +454,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
         src2 = self.cross_attn(
             tgt + query_pos,       # query
             reference_points,      # 每个 query 的参考点
-            src + src_pos,         # value
+            src + src_pos,         # src 是 encoder的输出
             src_spatial_shapes,
             src_level_start_index
         )
@@ -623,10 +623,10 @@ class DeformableTransformer(nn.Module):
         for layer in self.decoder_layers:
             
             # reference_points 在这里是固定的，但在更高级的版本中，它会在每层后被预测和更新
-            # tgt           ->[4, 50, 256]
-            # query_embed   ->[4, 50, 256]
-            # ref_points_dec  [4, 50, 4, 2]
-            # memory        ->[4, 13269, 256]
+            # tgt           ->[4, 50, 256]    全0的tensor
+            # query_embed   ->[4, 50, 256]    
+            # ref_points_dec  [4, 50, 4, 2]   embedding
+            # memory        ->[4, 13269, 256] encoder 输出
             
             tgt = layer(
                 tgt, 
