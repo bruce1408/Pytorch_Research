@@ -173,8 +173,8 @@ def ms_deform_attn_pytorch(value, spatial_shapes, level_start_index,
         grid_l = grid_l.permute(0, 2, 1, 3, 4)                        # [B, n_heads, Len_q, n_points, 2]
         grid_l = grid_l.reshape(B * n_heads, Len_q, n_points, 2)      # [B*n_heads, Len_q, n_points, 2]
 
-        # 在每个 head 对应的特征图上用 grid_sample 采样 --> [32, 32, 13269, 4]
-        # [B*n_heads, D_head, Len_q, n_points]
+        # 在每个 head 对应的特征图上用 grid_sample 采样
+        # [B*n_heads, D_head, Len_q, n_points]-->[32, 32, 13269, 4]
         sampled = F.grid_sample(
             value_l, grid_l, mode='bilinear', padding_mode='zeros', align_corners=False
         )  
@@ -265,24 +265,24 @@ class MSDeformAttn(nn.Module):
 
         # 先对 value 做线性变换，相当于生成 K,V
         # 1. 对 value 做线性变换
-        value = self.value_proj(value)
+        value = self.value_proj(value)  # [4, 13294, 256]
 
-        # 预测 offsets & attention weights [4, 13269, 8, 4, 4, 2]
         # 2. 从 query 预测采样偏移和注意力权重
         # sampling_offsets: [B, Len_q, n_heads * n_levels * n_points * 2]
+        # 预测 offsets & attention weights [4, 13269, 8, 4, 4, 2]
         sampling_offsets = self.sampling_offsets(query).view(
             B, Len_q, self.n_heads, self.n_levels, self.n_points, 2
         ) 
         
-        # [4, 13269, 8, 4, 4]
         # attention_weights: [B, Len_q, n_heads * n_levels * n_points]
+        # [4, 13269, 8, 4, 4]
         attention_weights = self.attention_weights(query).view(
             B, Len_q, self.n_heads, self.n_levels, self.n_points
         ) 
         
-        # [4, 13269, 8, 4, 4]
         # 对权重进行 softmax 归一化。
         # 注意 softmax 是在 (n_levels * n_points) 这个维度上做的
+        # [4, 13269, 8, 4, 4]
         attention_weights = F.softmax(
             attention_weights.view(B, Len_q, self.n_heads, -1), dim=-1
         ).view(B, Len_q, self.n_heads, self.n_levels, self.n_points)
@@ -303,7 +303,7 @@ class MSDeformAttn(nn.Module):
         # [4, 13269, 8, 4, 4, 2] --> [B,Len_q,n_heads,L,n_points,2] 获取采样位置
         sampling_locations = reference_points + sampling_offsets     
         
-        # 4. 调用核心函数进行注意力计算
+        # 4. 调用核心函数进行注意力计算, 这里的value是src，不带pos的token编码
         out = ms_deform_attn_pytorch(
             value, spatial_shapes, level_start_index,
             sampling_locations, attention_weights, self.n_heads
@@ -346,7 +346,7 @@ class DeformableTransformerEncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
-        self.activation = F.relu
+        self.relu = F.relu
 
     def forward(self, src, pos, reference_points,
                 spatial_shapes, level_start_index, src_mask=None):
@@ -363,7 +363,7 @@ class DeformableTransformerEncoderLayer(nn.Module):
         # 这里是query带位置编码，在src里面进行查询，src 不需要位置编码
         q = k = src + pos 
         
-        # 注意力模块的输入：query, 参考点, value (这里是 src 本身)
+        # 注意力模块的输入：query, 参考点, value (这里是 src 本身) --> [4, 13294, 256]
         attn_out = self.self_attn(q, reference_points, src, spatial_shapes, level_start_index)
         
         # Add & Norm
@@ -371,7 +371,7 @@ class DeformableTransformerEncoderLayer(nn.Module):
         src = self.norm1(src)
 
         # 2. Feed-Forward Network
-        ffn_out = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        ffn_out = self.linear2(self.dropout(self.relu(self.linear1(src))))
         
         # Add & Norm
         src = src + self.dropout2(ffn_out)
@@ -421,7 +421,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
-        self.activation = F.relu
+        self.relu = F.relu
 
     def forward(self, tgt, query_pos,
                 reference_points, src, src_spatial_shapes, src_level_start_index,
@@ -465,7 +465,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
         tgt = self.norm2(tgt)
 
         # 3. Feed-Forward Network
-        ffn_out = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
+        ffn_out = self.linear2(self.dropout(self.relu(self.linear1(tgt))))
         
         # Add & Norm
         tgt = tgt + self.dropout3(ffn_out)
@@ -512,12 +512,13 @@ class DeformableTransformer(nn.Module):
         # decoder 的 reference points（每个 query、每个 level 的 (x,y)）
         # 为 decoder 的 object queries 创建可学习的参考点。
         # 每个 query 在每个 level 上都有一个 2D 参考点，所以是 num_queries * n_levels * 2
-        self.ref_point_embed = nn.Embedding(num_queries, n_levels * 2)
+        self.ref_point_embed = nn.Embedding(num_queries, n_levels * 2)  # [50, 4*2]
 
     def get_reference_points_encoder(self, spatial_shapes, device):
         """
-        为 encoder 输入生成每个位置的 reference point:
-        [Len_in, 2], 每个位置对应特征图中的中心点坐标归一化到 [0,1]
+            参考点是每个网格中心点的坐标，并进行归一化 [0.5, 0.5]->[0.5, 0.5]/100->[0.005, 0.005]
+            为 encoder 输入生成每个位置的 reference point:
+            [Len_in, 2], 每个位置对应特征图中的中心点坐标归一化到 [0,1]
         """
         reference_points_list = []
         for l in range(spatial_shapes.shape[0]):
@@ -573,9 +574,9 @@ class DeformableTransformer(nn.Module):
               
             
         # 拼接所有层级的特征、mask 和位置编码
-        src_flatten = torch.cat(src_flatten, 1)    # [B, Len_in, C]
-        mask_flatten = torch.cat(mask_flatten, 1)  # [B, Len_in]
-        pos_flatten = torch.cat(pos_flatten_list, 1) # [B, Len_in, C]-->[4, 13269, 256]             
+        src_flatten = torch.cat(src_flatten, 1)    # [B, Len_in, C] --> [4, 13269, 256] 
+        mask_flatten = torch.cat(mask_flatten, 1)  # [B, Len_in] --> [4, 13269]
+        pos_flatten = torch.cat(pos_flatten_list, 1) # [B, Len_in, C]--> [4, 13269, 256]           
         
         spatial_shapes = torch.tensor(spatial_shapes_list, 
                                       dtype=torch.long, 
@@ -593,28 +594,49 @@ class DeformableTransformer(nn.Module):
         ref_points_enc = ref_points_enc.repeat(src_flatten.shape[0], 1, self.n_levels, 1)  
         
         # ============ Encoder ============
-        memory = src_flatten  #[4, 13269, 256]
+        memory = src_flatten  
+        # src_flatten       -> [4, 13269, 256] 
+        # pos_flatten       -> [4, 13294, 256]
+        # ref_points_enc    -> [4, 13269, 4, 2]
+        # spatial_shapes    -> [4, 2]
+        # level_start_index -> [0, 10000, 12500, 13125](value)
         for layer in self.encoder_layers:
-            memory = layer(memory, pos_flatten, ref_points_enc, spatial_shapes, level_start_index)
+            memory = layer(
+                memory, 
+                pos_flatten,
+                ref_points_enc,
+                spatial_shapes,
+                level_start_index
+            )
 
         # ============ Decoder ============
-        N_q = query_embed.shape[0]
-        query_embed = query_embed.unsqueeze(0).expand(memory.shape[0], -1, -1)  # [B,N_q,C]
+        N_q = query_embed.shape[0] # 50
+        query_embed = query_embed.unsqueeze(0).expand(memory.shape[0], -1, -1)  # [B, N_q, C] -> [4, 50, 256]
         tgt = torch.zeros_like(query_embed)                                     # 初始 query 特征
 
         # decoder reference points（learned）
-        ref = self.ref_point_embed.weight                                       # [N_q, L*2]
-        ref = ref.sigmoid().view(N_q, self.n_levels, 2)                         # [N_q,L,2] in [0,1]
-        ref_points_dec = ref.unsqueeze(0).repeat(memory.shape[0], 1, 1, 1)      # [B,N_q,L,2]
+        ref = self.ref_point_embed.weight                                       # [N_q, L*2]            --> [50, 8]
+        ref = ref.sigmoid().view(N_q, self.n_levels, 2)                         # [N_q, L, 2] in [0,1]  --> [50, 4, 2]
+        ref_points_dec = ref.unsqueeze(0).repeat(memory.shape[0], 1, 1, 1)      # [B, N_q, L, 2]        --> [4, 50, 4, 2]
 
         hs = []
         for layer in self.decoder_layers:
             
             # reference_points 在这里是固定的，但在更高级的版本中，它会在每层后被预测和更新
+            # tgt           ->[4, 50, 256]
+            # query_embed   ->[4, 50, 256]
+            # ref_points_dec  [4, 50, 4, 2]
+            # memory        ->[4, 13269, 256]
+            
             tgt = layer(
-                tgt, query_embed,
-                ref_points_dec, memory, spatial_shapes, level_start_index,
-                src_pos=pos_flatten, src_mask=mask_flatten
+                tgt, 
+                query_embed,
+                ref_points_dec,
+                memory,
+                spatial_shapes,
+                level_start_index,
+                src_pos=pos_flatten,
+                src_mask=mask_flatten
             )
             hs.append(tgt)
 
@@ -659,7 +681,7 @@ class DeformableDETR(nn.Module):
         )
 
         # 可学习的 object queries，每个 query 是一个 d_model 维的向量
-        self.query_embed = nn.Embedding(num_queries, d_model)
+        self.query_embed = nn.Embedding(num_queries, d_model)  # [50, 256]
 
         # 分类头：一个线性层，将 query 特征映射到类别概率上。
         # 输出维度是 num_classes + 1，因为要额外包含一个 "no-object" (无物体) 类。
