@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# 主要实现了encoder 和 decoder 部分的内容，后处理参考model_03_interative_refinement文件
 # 如果你本地有 scipy，可以打开这行，用真正的匈牙利算法
 # from scipy.optimize import linear_sum_assignment
 
@@ -428,8 +429,8 @@ class DeformableTransformerDecoderLayer(nn.Module):
                 src_pos=None, src_mask=None):
         """
         Args:
-            tgt (torch.Tensor): decoder 的输入，即 object queries 的特征，[B, N_q, C]。
-            query_pos (torch.Tensor): object queries 的位置编码，[B, N_q, C]。
+            tgt (torch.Tensor): decoder 的输入，初始值是全0的tensor，即 object queries 的特征，[B, N_q, C]。
+            query_pos (torch.Tensor): object queries 的位置编码，[B, N_q, C]。是可学习的embedding；
             reference_points (torch.Tensor): decoder query 对应的参考点，[B, N_q, L, 2]。
             src (torch.Tensor): encoder 的输出 (memory)，[B, Len_in, C]。
             src_spatial_shapes, src_level_start_index: src 的形状和索引信息。
@@ -821,11 +822,11 @@ class ToySetCriterion(nn.Module):
           - pred_boxes:  [B,N_q,4]
         targets: list[dict] 长度 B
           每个 dict:
-            - labels: [M_i] in [0,C-1]
-            - boxes:  [M_i,4] in [0,1] (cx,cy,w,h)
+            - labels: [M_i] in [0, C-1]
+            - boxes:  [M_i,4] in [0, 1] (cx,cy,w,h)
         """
-        pred_logits = outputs["pred_logits"]   # [B,N_q,C+1]
-        pred_boxes  = outputs["pred_boxes"]    # [B,N_q,4]
+        pred_logits = outputs["pred_logits"]   # [B, N_q, Class + 1]  --> [4, 50, 21]
+        pred_boxes  = outputs["pred_boxes"]    # [B, N_q, 4]
         B, N_q, C1 = pred_logits.shape
         num_classes = C1 - 1
 

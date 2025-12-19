@@ -63,17 +63,22 @@ class MSDeformAttn(nn.Module):
 
     def forward(self, query, reference_points, input_flatten, spatial_shapes, level_start_index):
         B, Len_Q, _ = query.shape
+        
         # 1. 生成 Offsets 和 Weights
         sampling_offsets = self.sampling_offsets(query).view(
             B, Len_Q, self.n_heads, self.n_levels, self.n_points, 2)
+        
         attention_weights = self.attention_weights(query).view(
             B, Len_Q, self.n_heads, self.n_levels * self.n_points)
+        
         attention_weights = F.softmax(attention_weights, -1).view(
             B, Len_Q, self.n_heads, self.n_levels, self.n_points)
 
         # 2. 计算绝对采样坐标
         if reference_points.shape[-1] == 2:
+            
             offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
+            
             sampling_locations = reference_points[:, :, None, None, None, :] \
                                  + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
         else:
@@ -83,16 +88,23 @@ class MSDeformAttn(nn.Module):
         output = self.multi_scale_grid_sample(
             input_flatten, spatial_shapes, sampling_locations, attention_weights
         )
+        
         return self.output_proj(output)
 
     def multi_scale_grid_sample(self, input_flatten, spatial_shapes, sampling_locations, attention_weights):
-        B, Len_Q, C = input_flatten.shape
+        
+        B, Len_V, C = input_flatten.shape
+        Len_Q = sampling_locations.shape[1]
         input_split = input_flatten.split([h*w for h, w in spatial_shapes], dim=1)
+        
         output = 0
+        
         for lvl, (H, W) in enumerate(spatial_shapes):
             feat_map = input_split[lvl].transpose(1, 2).view(B, C, H, W)
+            
             # Grouped Sampling Trick: 将 Heads 融合进 Batch
             feat_map = feat_map.view(B, self.n_heads, self.head_dim, H, W).flatten(0, 1)
+            
             grid = sampling_locations[:, :, :, lvl, :, :]
             grid = 2 * grid - 1
             grid = grid.permute(0, 2, 1, 3, 4).flatten(0, 1)
@@ -100,11 +112,13 @@ class MSDeformAttn(nn.Module):
             sampled_feat = F.grid_sample(
                 feat_map, grid, mode='bilinear', padding_mode='zeros', align_corners=False
             )
+            
             sampled_feat = sampled_feat.view(B, self.n_heads, self.head_dim, Len_Q, self.n_points)
             sampled_feat = sampled_feat.permute(0, 3, 1, 4, 2)
             
             weights = attention_weights[:, :, :, lvl, :].unsqueeze(-1)
             output += (sampled_feat * weights).sum(dim=3)
+        
         return output.flatten(2)
 
 # ==========================================
@@ -125,12 +139,15 @@ class DeformableTransformerEncoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
 
     def forward(self, src, pos, reference_points, spatial_shapes, level_start_index):
+        
         q = src + pos
+        
         src2 = self.self_attn(q, reference_points, src, spatial_shapes, level_start_index)
         src = self.norm1(src + self.dropout1(src2))
         
         src2 = self.linear2(self.dropout2(self.activation(self.linear1(src))))
         src = self.norm2(src + self.dropout3(src2))
+        
         return src
 
 class DeformableTransformerEncoder(nn.Module):
@@ -202,17 +219,16 @@ class DeformableTransformerDecoder(nn.Module):
         # 这里的 bbox_embed 在外部定义并传入
         self.bbox_embed = None 
 
-    def forward(self, tgt, reference_points, src, src_spatial_shapes, level_start_index, query_pos, bbox_embed):
+    def forward(self, tgt, reference_points, src, src_spatial_shapes, level_start_index, query_pos, bbox_embed_layer_list):
         output = tgt
-        intermediate = []
-        intermediate_ref_points = []
+        decoder_outputs = []
+        decoder_ref_points = []
         
         for layer_idx, layer in enumerate(self.layers):
             # 获取当前参考点 (Detach 掉，不反向传播 Ref Point 的梯度到上一层，稳定训练)
             # [B, Nq, 2]
-            reference_points_input = reference_points[:, :, None] * src_spatial_shapes.new_tensor([1., 1.])[None, None, :] 
-            
-            # 运行 Decoder Layer
+                        
+            # 运行 Decoder Layer [B, Nq, 256]
             output = layer(
                 tgt=output,
                 query_pos=query_pos,
@@ -227,26 +243,29 @@ class DeformableTransformerDecoder(nn.Module):
             # 使用 inverse_sigmoid 进行坐标空间的变换
             
             # 获取当前层的预测头 (通常是共享权重的)
-            layer_bbox_embed = bbox_embed[layer_idx]
+            current_refinement_head = bbox_embed_layer_list[layer_idx]
             
-            # 预测偏移量
-            delta_box = layer_bbox_embed(output)
-            
-            # 2. 更新参考点 (只更新 cx, cy)
-            # 公式: sigmoid( inverse_sigmoid(ref) + delta )
-            ref_points_inv_sigmoid = inverse_sigmoid(reference_points)
-            
-            # 更新后的坐标 (未归一化)
-            new_ref_points_inv = ref_points_inv_sigmoid + delta_box[..., :2]
-            
-            # 归一化回去 -> [0, 1]
-            reference_points = new_ref_points_inv.sigmoid()
+            # 2. 模型预测出的偏移量, 特征空间范围在 -inf ~ +inf
+            pred_delta_box = current_refinement_head(output)
             
             # 保存中间结果 (Prediction)
-            intermediate.append(output)
-            intermediate_ref_points.append(reference_points)
+            decoder_ref_points.append(reference_points) 
+            decoder_outputs.append(output)
+            
+            # 3. 然后再更新，给下一层用
+            reference_points = reference_points.detach() # 记得 detach
+            
+            # 4. 更新参考点 (只更新 cx, cy)
+            # 公式: sigmoid( inverse_sigmoid(ref) + delta )，reference_point 范围在[0-1]转换到坐标空间
+            ref_points_inv_sigmoid = inverse_sigmoid(reference_points)
+            
+            # 5. 更新后的坐标 (未归一化).,只关心 便宜点的位置，不用考虑w和h
+            new_ref_points_inv = ref_points_inv_sigmoid + pred_delta_box[..., :2]
+            
+            # 归一化回去 -> [0, 1]，不断的更新这个reference_points
+            reference_points = new_ref_points_inv.sigmoid()
 
-        return torch.stack(intermediate), torch.stack(intermediate_ref_points)
+        return torch.stack(decoder_outputs), torch.stack(decoder_ref_points)
 
 # ==========================================
 # 6. Deformable DETR 完整模型
@@ -287,7 +306,7 @@ class DeformableDETR(nn.Module):
         # Class Head: 输出类别 Logits
         self.class_embed = nn.Linear(self.d_model, num_classes)
         # Box Head: 输出 (dx, dy, dw, dh) 偏移量
-        self.bbox_embed = nn.ModuleList([
+        self.bbox_embed_layer_list = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(self.d_model, 256), nn.ReLU(),
                 nn.Linear(256, 256), nn.ReLU(),
@@ -296,7 +315,8 @@ class DeformableDETR(nn.Module):
         ])
         
         # 这里的 bias 处理是 trick，保证初始训练稳定
-        nn.init.constant_(self.bbox_embed[0][-1].layers[-1].bias.data[2:], -2.0)
+        nn.init.constant_(self.bbox_embed_layer_list[0][-1].bias.data[2:], -2.0)
+        
         self.transformer_weights_init()
 
     def transformer_weights_init(self):
@@ -368,7 +388,7 @@ class DeformableDETR(nn.Module):
         )
         
         # 5. 准备 Decoder Input
-        # query_embed 拆分为 query_pos 和 tgt (初始为0)
+        # query_embed 拆分为 query_pos 和 tgt
         query_pos, tgt = torch.split(self.query_embed.weight, self.d_model, dim=1)
         query_pos = query_pos.unsqueeze(0).expand(B, -1, -1)
         tgt = tgt.unsqueeze(0).expand(B, -1, -1)
@@ -378,14 +398,14 @@ class DeformableDETR(nn.Module):
         dec_ref_points = torch.sigmoid(query_pos[..., :2]) 
         
         # 6. 运行 Decoder (Iterative Refinement)
-        hs, inter_references = self.decoder(
+        decoder_outputs_stack, decoder_ref_points_stack = self.decoder(
             tgt=tgt,
             reference_points=dec_ref_points,
             src=memory,
             src_spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
             query_pos=query_pos,
-            bbox_embed=self.bbox_embed # 传入预测头用于中间层修正
+            bbox_embed_layer_list=self.bbox_embed_layer_list # 传入预测头用于中间层修正
         )
         
         # 7. 生成最终输出
@@ -393,26 +413,26 @@ class DeformableDETR(nn.Module):
         outputs_classes = []
         outputs_coords = []
         
-        for lvl in range(hs.shape[0]):
+        for lvl in range(decoder_outputs_stack.shape[0]):
             # 这里的 reference 是该层修正后的参考点
-            reference = inter_references[lvl]
-            reference = inverse_sigmoid(reference) # 转回 Logit 空间以便相加
+            reference = decoder_ref_points_stack[lvl]
+            reference = inverse_sigmoid(reference) # 转回 特征空间以便相加
             
             # 预测类别
-            outputs_class = self.class_embed(hs[lvl])
+            outputs_class = self.class_embed(decoder_outputs_stack[lvl])
             outputs_classes.append(outputs_class)
             
             # 预测框偏移量
-            tmp = self.bbox_embed[lvl](hs[lvl])
+            tmp_bbox = self.bbox_embed_layer_list[lvl](decoder_outputs_stack[lvl])
             
             # 坐标变换: ref + offset -> sigmoid
             if reference.shape[-1] == 4:
-                tmp += reference
+                tmp_bbox += reference
             else:
                 assert reference.shape[-1] == 2
-                tmp[..., :2] += reference
+                tmp_bbox[..., :2] += reference
             
-            outputs_coord = tmp.sigmoid()
+            outputs_coord = tmp_bbox.sigmoid()
             outputs_coords.append(outputs_coord)
             
         outputs_class = torch.stack(outputs_classes) # [Num_Layers, B, Nq, Class]
@@ -425,7 +445,7 @@ class DeformableDETR(nn.Module):
 # ==========================================
 if __name__ == "__main__":
     # 模拟输入
-    dummy_img = torch.randn(2, 3, 800, 800)
+    dummy_img = torch.randn(4, 3, 800, 800)
     
     # 实例化模型 (2层 Encoder, 2层 Decoder)
     model = DeformableDETR(num_layers=2)
@@ -438,7 +458,7 @@ if __name__ == "__main__":
     print(f"输入 Batch Size: {dummy_img.shape[0]}")
     print(f"层数 (Layers): {out_cls.shape[0]}")
     print(f"查询数 (Queries): {out_cls.shape[2]}")
-    print(f"分类 Logits Shape: {out_cls.shape}") # [2, 2, 300, 91]
-    print(f"回归 Box Shape:    {out_box.shape}") # [2, 2, 300, 4]
+    print(f"分类 Logits Shape: {out_cls.shape}") # [2, 4, 300, 91]
+    print(f"回归 Box Shape:    {out_box.shape}") # [2, 4, 300, 4]
     print("-" * 30)
     print("代码运行成功！")
