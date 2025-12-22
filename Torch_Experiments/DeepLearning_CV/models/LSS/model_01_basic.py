@@ -62,7 +62,90 @@ class LSS_Core(nn.Module):
         # 注册为 Parameter 但不需要梯度 (因为它只是坐标模板)
         return nn.Parameter(frustum, requires_grad=False)
 
+
     def get_geometry(self, rots, trans, intrinsics):
+        """
+        [真实实现] 几何投影 (Geometry Projection)
+        
+        输入:
+            rots:       (B, N, 3, 3) 相机到车身的旋转矩阵
+            trans:      (B, N, 3)    相机到车身的平移向量
+            intrinsics: (B, N, 3, 3) 相机内参矩阵
+            
+        输出:
+            coords_xyz: (B, N, D, H, W, 3) 车身坐标系下的点云
+        """
+        # 1. 维度准备
+        B, N, _ = trans.shape
+        D, H, W, _ = self.frustum.shape
+        
+        # 将 frustum 扩展到 Batch 和 Camera 维度，并移动到正确的设备(GPU)
+        # frustum shape: (D, H, W, 3) -> (B, N, D, H, W, 3)
+        # 内容: points[..., 0]是u, [..., 1]是v, [..., 2]是d
+        points = self.frustum.to(trans.device).unsqueeze(0).unsqueeze(0).expand(B, N, D, H, W, 3)
+
+        # 2. 提取像素坐标和深度
+        # 深度 d: (B, N, D, H, W)
+        depth = points[..., 2] 
+        
+        # 构造齐次像素坐标 [u, v, 1]
+        # shape: (B, N, D, H, W, 3)
+        points_uv1 = torch.stack([
+            points[..., 0], 
+            points[..., 1], 
+            torch.ones_like(depth)
+        ], dim=-1)
+
+        # 3. 展平空间维度以进行批量矩阵乘法
+        # 为了高效计算，我们将 D, H, W 展平为 NumPoints
+        NumPoints = D * H * W
+        
+        # (B, N, D, H, W, 3) -> (B, N, NumPoints, 3) -> (B, N, 3, NumPoints)
+        # 这里转置是为了符合矩阵乘法 (3x3) @ (3xN) 的格式
+        points_uv1_flat = points_uv1.view(B, N, NumPoints, 3).permute(0, 1, 3, 2)
+        
+        # 深度也展平: (B, N, 1, NumPoints) 用于广播乘法
+        depth_flat = depth.view(B, N, 1, NumPoints)
+
+        # =================================================
+        # 阶段 1: 像素坐标 -> 相机坐标 (Unprojection)
+        # 公式: P_cam = d * K_inv * P_pix
+        # =================================================
+        
+        # 计算内参的逆矩阵: (B, N, 3, 3)
+        intrinsics_inv = torch.inverse(intrinsics)
+        
+        # 矩阵乘法: K_inv @ P_uv1
+        # (B, N, 3, 3) @ (B, N, 3, NumPoints) -> (B, N, 3, NumPoints)
+        points_cam = torch.matmul(intrinsics_inv, points_uv1_flat)
+        
+        # 乘以深度
+        points_cam = points_cam * depth_flat
+
+        # =================================================
+        # 阶段 2: 相机坐标 -> 车身坐标 (Extrinsic)
+        # 公式: P_ego = Rot * P_cam + Trans
+        # =================================================
+        
+        # 旋转: Rot @ P_cam
+        # (B, N, 3, 3) @ (B, N, 3, NumPoints) -> (B, N, 3, NumPoints)
+        points_ego = torch.matmul(rots, points_cam)
+        
+        # 平移: + Trans
+        # trans: (B, N, 3) -> (B, N, 3, 1) 以便广播相加
+        points_ego = points_ego + trans.view(B, N, 3, 1)
+
+        # 4. 恢复形状
+        # (B, N, 3, NumPoints) -> (B, N, 3, D, H, W)
+        points_ego = points_ego.view(B, N, 3, D, H, W)
+        
+        # 调整最后维度的顺序: (B, N, D, H, W, 3)
+        # 最后的 3 代表 (x, y, z)
+        points_ego = points_ego.permute(0, 1, 3, 4, 5, 2)
+
+        return points_ego
+    
+    def get_geometry_fake(self, rots, trans, intrinsics):
         """
         几何投影 (Geometry Projection)
         作用: 将视锥点从 "图像坐标系 (u,v,d)" 转换到 "车身坐标系 (x,y,z)"。
@@ -166,13 +249,13 @@ class LSS_Core(nn.Module):
         # (Concatenate 是为了处理第一个元素)
         cumsum = torch.cat((cumsum[:1], cumsum[1:] - cumsum[:-1]))
         
-        # 5. 填回 BEV 图片 (Scatter)
+        # 5. 填回 BEV 图片 (Scatter) C=64
         final_bev = torch.zeros((1, 200, 200, C), device=x.device)
         
         # 只在有数据的格子填入计算好的 sum
         if cumsum.shape[0] > 0:
-             # indices[keep] 得到了去重后的、有效的 voxel 索引
-             final_bev.view(-1, C)[indices[keep]] = cumsum
+            # indices[keep] 得到了去重后的、有效的 voxel 索引
+            final_bev.view(-1, C)[indices[keep]] = cumsum
         
         # 调整维度顺序以符合 PyTorch 标准 (B, C, H, W)
         return final_bev.permute(0, 3, 1, 2)
@@ -195,7 +278,7 @@ class LSS_Core(nn.Module):
         cam_feats = cam_feats.permute(0, 1, 2, 4, 5, 3) 
         
         # --- Step 2: Geometry (计算每个特征点的 3D 坐标) ---
-        # 输出: (B, N, D, H, W, 3) 的 xyz 坐标
+        # 输出: (B, N, D, H, W, 3) 的 xyz 坐标 自车坐标系
         geom_xyz = self.get_geometry(rots, trans, intrinsics)
         
         # --- Step 3: Splat (3D 特征 -> BEV 地图) ---
