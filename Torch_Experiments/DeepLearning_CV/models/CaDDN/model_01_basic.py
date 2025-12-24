@@ -65,7 +65,7 @@ class CaDDN_Core(nn.Module):
         zs = torch.linspace(z_min, z_max, Z_n)
         
         # Meshgrid 生成 3D 坐标体
-        # 注意: indexing='ij' 对应 Z, Y, X 顺序
+        # 注意: indexing='ij' 对应 Z, Y, X 顺序 -> [16, 200, 200]
         zs, ys, xs = torch.meshgrid(zs, ys, xs, indexing='ij')
         
         # 堆叠: (Z, Y, X, 3) -> (3, Z, Y, X)
@@ -83,7 +83,7 @@ class CaDDN_Core(nn.Module):
         2. 投影回相机平面 -> 得到 (u, v) 和 深度 d。
         3. 用 (u, v, d) 去 Frustum Feature 里采样。
         """
-        B = frustum_feat.shape[0]
+        B = frustum_feat.shape[0] # [2, 64, 80, 96, 320]
         device = frustum_feat.device
         
         # 1. 准备 Voxel 坐标 (B, 3, Z, Y, X) -> Flatten -> (B, 3, N_voxels)
@@ -99,7 +99,7 @@ class CaDDN_Core(nn.Module):
         # x,y,z 变成 x,y,z,1
         voxels_homo = torch.cat([voxels_flat, ones], dim=1) # (B, 4, N)
         
-        # 矩阵乘法: P_img = K * T * P_world，把世界坐标系 转换为 像素坐标系
+        # 矩阵乘法: P_img = K * T * P_world，把世界坐标系 转换为 像素坐标系，这个结果是 [u*z, v*z, z, 1]
         img_points = torch.bmm(calib_mats, voxels_homo) # (B, 4, N) -> [2, 4, 640000]
         
         # 3. 归一化得到 (u, v) 和 深度 depth
@@ -132,8 +132,8 @@ class CaDDN_Core(nn.Module):
         sample_grid = sample_grid.view(B, Z, Y, X, 3)
         
         # 5. 三线性插值 (Trilinear Interpolation)
-        # input: (B, C, D_bins, H_feat, W_feat) -> 5D Tensor
-        # grid:  (B, Z_out, Y_out, X_out, 3)
+        # input: (B, C, D_bins, H_feat, W_feat) -> [2, 64, 80, 96, 320]
+        # grid:  (B, Z_out, Y_out, X_out, 3)    -> [2, 16, 200, 200, 3]
         voxel_features = F.grid_sample(
             frustum_feat, 
             sample_grid, 
@@ -142,7 +142,7 @@ class CaDDN_Core(nn.Module):
             align_corners=False
         )
         
-        return voxel_features # (B, C, Z, Y, X)
+        return voxel_features # (B, C, Z, Y, X) -> [2, 64, 16, 200, 200]
 
     def forward(self, images, calib_mats):
         """
@@ -179,13 +179,13 @@ class CaDDN_Core(nn.Module):
         # Step 2: 视锥 -> 体素变换 (Frustum to Voxel)
         # ------------------------------------------------
         # 这是一个 5D -> 5D 的插值过程
-        # 输入是视锥形状的 (C, D, H, W)，输出是长方体形状的 (C, Z, Y, X)
+        # 输入是视锥形状的 (C, D, H, W)，输出是长方体形状的 (C, Z, Y, X) self.voxel_grid -> [1, 3, 16, 200, 200]
         voxel_feat_3d = self.frustum_to_voxel_sampling(frustum_feat, self.voxel_grid, calib_mats)
         
         # ------------------------------------------------
         # Step 3: 体素塌缩 (Voxel Collapse)
         # ------------------------------------------------
-        # Input: (B, C, Z, Y, X)
+        # Input: (B, C, Z, Y, X) -> [2, 64, 16, 200, 200]
         B, C, Z, Y, X = voxel_feat_3d.shape
         
         # 把 Z 轴和 C 轴合并，准备变 BEV
@@ -193,7 +193,7 @@ class CaDDN_Core(nn.Module):
         voxel_feat_collapsed = voxel_feat_3d.view(B, C * Z, Y, X)
         
         # 用卷积降维并融合 Z 轴信息
-        # Shape: (B, 128, Y, X) -> 最终的 BEV Feature
+        # Shape: (B, 128, Y, X) -> 最终的 BEV Feature -> [2, 128, 200, 200]
         bev_feat = self.bev_compressor(voxel_feat_collapsed)
         
         return bev_feat, depth_logits # 返回 depth_logits 用于计算 Loss

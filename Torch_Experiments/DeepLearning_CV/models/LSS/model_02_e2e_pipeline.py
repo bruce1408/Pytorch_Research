@@ -29,6 +29,7 @@ class LSS_Core(nn.Module):
         frustum = torch.stack((xs, ys, ds.expand(D, H, W)), -1)
         return nn.Parameter(frustum, requires_grad=False)
 
+
     def get_geometry(self, rots, trans, intrinsics):
         # 强制生成有效范围内的点，保证训练稳定
         B, N, _ = trans.shape
