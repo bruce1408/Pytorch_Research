@@ -17,20 +17,27 @@ class MockBackbone(nn.Module):
 
 class MockBEVEncoder(nn.Module):
     def __init__(self, in_channels, out_channels):
+        
         super().__init__()
+        
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU()
         )
-    def forward(self, x): return self.conv(x)
+        
+    def forward(self, x): 
+        return self.conv(x)
 
 class MockHead(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
+    
         # 输出18通道: 10个类别热力图 + 8个回归属性(x, y, z, w, l, h, sin, cos)
         self.conv = nn.Conv2d(in_channels, 18, kernel_size=1)
-    def forward(self, x): return self.conv(x)
+    
+    def forward(self, x): 
+        return self.conv(x)
 
 class LSSViewTransformer(nn.Module):
     def __init__(self, grid_conf, out_channels):
@@ -39,8 +46,11 @@ class LSSViewTransformer(nn.Module):
         self.dx, self.bx, self.nx = self.gen_dx_bx(self.grid_conf['xbound'], 
                                                    self.grid_conf['ybound'], 
                                                    self.grid_conf['zbound'])
+        
         self.D = int((grid_conf['dbound'][1] - grid_conf['dbound'][0]) / grid_conf['dbound'][2])
+        
         self.depth_net = nn.Conv2d(512, self.D + out_channels, kernel_size=1)
+        
         self.out_channels = out_channels
 
     def gen_dx_bx(self, xbound, ybound, zbound):
@@ -127,10 +137,15 @@ class BEVDet(nn.Module):
     def forward(self, imgs, rots, trans, intrins, post_rots, post_trans):
         B, N, C, H, W = imgs.shape
         imgs = imgs.view(B * N, C, H, W)
+        
         x = self.img_backbone(imgs)
+        
         x = x.view(B, N, x.shape[1], x.shape[2], x.shape[3])
+        
         x = self.view_transformer(x, rots, trans, intrins, post_rots, post_trans)
+        
         x = self.bev_encoder(x)
+        
         x = self.head(x)
         return x
 
@@ -296,8 +311,8 @@ if __name__ == "__main__":
     train_dataset = MockNuScenesDataset(length=100, is_train=True)
     val_dataset = MockNuScenesDataset(length=20, is_train=False)
     
-    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=2, shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0)
     
     # 3. 定义优化器和 Loss
     criterion = SimpleCenterPointLoss().to(device)
