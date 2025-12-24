@@ -275,11 +275,13 @@ def generate_realistic_projection_matrix(B, img_H=96, img_W=320):
     # [ 0  0 -1 ]  (Lidar Z -> Camera -Y) -> (上 -> 上)
     # [ 1  0  0 ]  (Lidar X -> Camera  Z) -> (前 -> 前)
     
+    # 这里是把Lidar坐标系转换为camera坐标系，lidar坐标系是 前,左,上; 相加是右,下,前;
     R_rect = torch.tensor([
         [0.0, -1.0, 0.0],
         [0.0,  0.0, -1.0],
         [1.0,  0.0,  0.0]
     ])
+    
     T_lidar2cam[:, :3, :3] = R_rect
     
     # --- 模拟平移 (Translation) ---

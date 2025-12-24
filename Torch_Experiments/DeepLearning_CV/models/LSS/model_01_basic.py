@@ -39,6 +39,14 @@ class LSS_Core(nn.Module):
         生成视锥点云模板 (Frustum Point Cloud Template)
         对应论文 3.1 节提到的 "D·H·W 的点云"。
         
+        frustum 张量就是一本 “花名册”。 只要你给出一个索引 [d, h, w]，
+        它就查表告诉你这个体素中心在原始图像的 u 坐标是多少，v 坐标是多少，以及它代表的物理深度 d 是多少
+        相机坐标系的参数化,严格说他是相机视锥体上的“离散参数空间”
+        相机视锥体的离散索引空间 + 每个索引对应的几何语义注释（u, v, depth）
+        
+        self.frustum[40][15][43]
+        tensor([43., 15., 44.])
+        
         返回: 
             frustum: shape (D, H, W, 3) 
             其中最后一维 3 代表 (u, v, d) -> (图像横坐标, 图像纵坐标, 深度值)
@@ -50,36 +58,69 @@ class LSS_Core(nn.Module):
         
         # 2. 生成图像坐标网格 (Image Coordinate Grid)
         H, W = self.data_conf['img_size']
-        # xs: 沿着宽度的坐标 [0, 1, ..., W-1] -> shape (1, 1, W) -> expand to (D, H, W)
+        
+        # xs: 沿着宽度的坐标 [0, 1, ..., W-1] -> shape (1, 1, W) -> expand to (D, H, W) 从0 --> 43
         xs = torch.linspace(0, W - 1, W, dtype=torch.float).view(1, 1, W).expand(D, H, W)
-        # ys: 沿着高度的坐标 [0, 1, ..., H-1] -> shape (1, H, 1) -> expand to (D, H, W)
+        
+        # ys: 沿着高度的坐标 [0, 1, ..., H-1] -> shape (1, H, 1) -> expand to (D, H, W) 从0 --> 15
         ys = torch.linspace(0, H - 1, H, dtype=torch.float).view(1, H, 1).expand(D, H, W)
-
+    
         # 3. 堆叠 (Stack)
         # 将 u, v, d 堆叠在一起，形成每个点的初始参数
         frustum = torch.stack((xs, ys, ds.expand(D, H, W)), -1)
         
         # 注册为 Parameter 但不需要梯度 (因为它只是坐标模板)
         return nn.Parameter(frustum, requires_grad=False)
+    
+    def create_frustum_with_meshgrid(self):
+        
+        # 1. 准备三个维度的 1D 向量
+        # Depth (D)
+        d_vec = torch.arange(*self.data_conf['dbound'], dtype=torch.float)
+        
+        # Height (H) -> 对应 y
+        h_vec = torch.linspace(0, self.data_conf['img_size'][0] - 1, self.data_conf['img_size'][0], dtype=torch.float)
+        
+        # Width (W)  -> 对应 x
+        w_vec = torch.linspace(0, self.data_conf['img_size'][1] - 1, self.data_conf['img_size'][1], dtype=torch.float)
+        
+        # 2. 使用 meshgrid 生成网格
+        # indexing='ij' 表示输出形状遵循输入的顺序: (D, H, W)
+        # grid_d: (D, H, W)
+        # grid_h: (D, H, W) -> 对应 y 坐标
+        # grid_w: (D, H, W) -> 对应 x 坐标
+        grid_d, grid_h, grid_w = torch.meshgrid(d_vec, h_vec, w_vec, indexing='ij')
+        
+        # 3. 堆叠 (Stack)
+        # 原代码的顺序是 (xs, ys, ds)，即 (Width, Height, Depth)
+        # 所以这里必须是 (grid_w, grid_h, grid_d)
+        frustum = torch.stack((grid_w, grid_h, grid_d), dim=-1)
+        
+        return frustum
+
 
 
     def get_geometry(self, rots, trans, intrinsics):
         """
         [真实实现] 几何投影 (Geometry Projection)
+        这个函数，通过对视锥frustum 存的 [u,v,d] 是 “图像参数 + 深度”（不是 xyz);然后通过投影，计算在自车坐标系下的3D点xyz
         
         输入:
             rots:       (B, N, 3, 3) 相机到车身的旋转矩阵
             trans:      (B, N, 3)    相机到车身的平移向量
             intrinsics: (B, N, 3, 3) 相机内参矩阵
+            N 表示有 N 个视角的摄像头sensor
             
         输出:
             coords_xyz: (B, N, D, H, W, 3) 车身坐标系下的点云
+            对每个 batch b、相机 n、深度 bin d、像素格点 (h,w)，
+            都有一个 ego 坐标系下的 3D 点 xyz = points_ego[b,n,d,h,w]
         """
         # 1. 维度准备
-        B, N, _ = trans.shape
+        B, N, _ = trans.shape # N 表示 6个视角的摄像头sensor
         D, H, W, _ = self.frustum.shape
         
-        # 将 frustum 扩展到 Batch 和 Camera 维度，并移动到正确的设备(GPU)
+        # 将 frustum 扩展到 Batch 和 Camera 维度，并移动到正确的设备(GPU), 相机坐标系的参数化
         # frustum shape: (D, H, W, 3) -> (B, N, D, H, W, 3)
         # 内容: points[..., 0]是u, [..., 1]是v, [..., 2]是d
         points = self.frustum.to(trans.device).unsqueeze(0).unsqueeze(0).expand(B, N, D, H, W, 3)
@@ -119,8 +160,10 @@ class LSS_Core(nn.Module):
         # (B, N, 3, 3) @ (B, N, 3, NumPoints) -> (B, N, 3, NumPoints)
         points_cam = torch.matmul(intrinsics_inv, points_uv1_flat)
         
-        # 乘以深度
+        # 乘以深度可以转换为 --> 相机坐标系 (B, N, 3, NumPoints)
+        # 相机坐标系 (camera frame) 下的 3D 点云（但还是平铺形状）
         points_cam = points_cam * depth_flat
+
 
         # =================================================
         # 阶段 2: 相机坐标 -> 车身坐标 (Extrinsic)
@@ -131,7 +174,7 @@ class LSS_Core(nn.Module):
         # (B, N, 3, 3) @ (B, N, 3, NumPoints) -> (B, N, 3, NumPoints)
         points_ego = torch.matmul(rots, points_cam)
         
-        # 平移: + Trans
+        # 平移: + Trans, 这里得到的是转化为 --> 自车坐标系
         # trans: (B, N, 3) -> (B, N, 3, 1) 以便广播相加
         points_ego = points_ego + trans.view(B, N, 3, 1)
 
@@ -165,6 +208,7 @@ class LSS_Core(nn.Module):
 
     def get_cam_feats(self, x):
         """
+        生成 3D 特征体
         [核心步骤 1: Lift]
         对应论文公式 (1): c_d = alpha_d * c
         作用: 将 2D 图像特征提升为 3D 体积特征。
@@ -202,6 +246,7 @@ class LSS_Core(nn.Module):
         [核心步骤 2: Splat]
         对应论文 4.2 节: "截锥池化累积和技巧" (CumSum Trick)
         作用: 将散乱的 3D 特征点 "拍扁" 并聚合到规则的 BEV 网格中。
+        x，y，z 表示3d空间对应的格子的index，也就是每一个点属于哪一个bev格子
         """
         # geom_feats: (B, N, D, H, W, C) -> 所有特征点
         # x, y, z:    (B, N, D, H, W)    -> 对应的网格索引
@@ -278,13 +323,14 @@ class LSS_Core(nn.Module):
         cam_feats = cam_feats.permute(0, 1, 2, 4, 5, 3) 
         
         # --- Step 2: Geometry (计算每个特征点的 3D 坐标) ---
-        # 输出: (B, N, D, H, W, 3) 的 xyz 坐标 自车坐标系
+        # 输出: (B, N, D, H, W, 3) 的 xyz 坐标 -> 自车坐标系
         geom_xyz = self.get_geometry(rots, trans, intrinsics)
         
         # --- Step 3: Splat (3D 特征 -> BEV 地图) ---
         
         # 坐标离散化 (Quantization): 物理坐标 -> 网格索引
         # 公式: index = (value - min_bound) / interval
+        # 这里从3d坐标变成了网格的下标，除以每个格子的大小，最后得到的是当前位置所在第几个格子
         geom_xyz = ((geom_xyz - (self.grid_conf['xbound'][0])) / self.grid_conf['xbound'][2]).long()
         x_idx, y_idx, z_idx = geom_xyz[..., 0], geom_xyz[..., 1], geom_xyz[..., 2]
         

@@ -58,7 +58,7 @@ class LSS_Core(nn.Module):
 
     def voxel_pooling(self, geom_feats, x, y, z):
         B, N, D, H, W, C = geom_feats.shape  # [1, 6, 41, 16, 44, 64]
-        Nprime = B * N * D * H * W
+        Nprime = B * N * D * H * W # 173184
         geom_feats = geom_feats.contiguous().view(Nprime, C)
         x = x.reshape(Nprime)
         y = y.reshape(Nprime)
@@ -72,22 +72,23 @@ class LSS_Core(nn.Module):
         x, y, z = x[mask], y[mask], z[mask]
         geom_feats = geom_feats[mask]
 
-        indices = x * Y_MAX + y + z * (X_MAX * Y_MAX)
+        indices = x * Y_MAX + y + z * (X_MAX * Y_MAX) # indices 就是格子的所有索引
         ranks = indices.argsort() # 从小到大的索引
         x, y, z = x[ranks], y[ranks], z[ranks]
         geom_feats = geom_feats[ranks]
         indices = indices[ranks]
-
+        # 173184
         keep = torch.ones_like(indices, dtype=torch.bool)
         keep[:-1] = (indices[1:] != indices[:-1])
-        
+        # [173184, 64]
         cumsum = torch.cumsum(geom_feats, 0)
         cumsum = cumsum[keep]
-        cumsum = torch.cat((cumsum[:1], cumsum[1:] - cumsum[:-1]))  # [37995, 64]
+        cumsum = torch.cat((cumsum[:1], cumsum[1:] - cumsum[:-1]))  # [38000, 64]
         
         final_bev = torch.zeros((1, X_MAX, Y_MAX, C), device=x.device)
         if cumsum.shape[0] > 0:
             final_bev.view(-1, C)[indices[keep]] = cumsum
+        
         # [1, 200, 200, 64] -> [1, 64, 200, 200]
         return final_bev.permute(0, 3, 1, 2) 
 
