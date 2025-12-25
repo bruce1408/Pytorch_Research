@@ -14,8 +14,10 @@ class MockBackbone(nn.Module):
         self.output_dim = 2048 
 
     def forward(self, x):
+        
         # x shape: [batch_size, 3, H, W]
         batch, _, h, w = x.shape
+        
         # 模拟 ResNet 最后一层的输出: 尺寸缩小 32 倍
         # 返回随机特征图
         return torch.randn(batch, self.output_dim, h // 32, w // 32)
@@ -24,8 +26,15 @@ class MockBackbone(nn.Module):
 # 2. DETR 主模型架构
 # ==========================================
 class DETR(nn.Module):
-    def __init__(self, num_classes, hidden_dim=256, nheads=8, 
-                 num_encoder_layers=6, num_decoder_layers=6, num_queries=100):
+    def __init__(self, 
+                 num_classes, 
+                 hidden_dim=256, 
+                 nheads=8, 
+                 num_encoder_layers=6, 
+                 num_decoder_layers=6, 
+                 num_queries=100
+        ):
+        
         super().__init__()
         
         # --- 组件 A: 骨干网络 ---
@@ -38,10 +47,10 @@ class DETR(nn.Module):
         # --- 组件 C: Transformer ---
         # PyTorch 自带的 Transformer 模块
         self.transformer = nn.Transformer(
-            d_model=hidden_dim,
-            nhead=nheads,
-            num_encoder_layers=num_encoder_layers,
-            num_decoder_layers=num_decoder_layers,
+            d_model = hidden_dim,
+            nhead = nheads,
+            num_encoder_layers = num_encoder_layers,
+            num_decoder_layers = num_decoder_layers,
             batch_first=False # 注意：PyTorch默认序列维度在第一位 (Seq, Batch, Dim)
         )
         
@@ -52,6 +61,7 @@ class DETR(nn.Module):
         # --- 组件 E: 预测头 (Prediction Heads) ---
         # 类别预测 (多加 1 个类别用于 "No Object" 背景类)
         self.class_embed = nn.Linear(hidden_dim, num_classes + 1)
+        
         # 坐标预测 (center_x, center_y, w, h)
         self.bbox_embed = nn.Linear(hidden_dim, 4) # MLP
 
@@ -62,6 +72,7 @@ class DETR(nn.Module):
         self.col_embed = nn.Embedding(50, hidden_dim // 2)
 
     def forward(self, x):
+        
         # 1. 骨干网络提取特征
         features = self.backbone(x) # [Batch, 2048, h, w]
         
@@ -70,6 +81,7 @@ class DETR(nn.Module):
         
         # 3. 构造位置编码 (Positional Encoding)
         B, C, H, W = h.shape
+        
         # 生成网格位置编码
         pos_x = self.col_embed(torch.arange(W).to(x.device)).unsqueeze(0).repeat(H, 1, 1)
         pos_y = self.row_embed(torch.arange(H).to(x.device)).unsqueeze(1).repeat(1, W, 1)
@@ -97,15 +109,18 @@ class DETR(nn.Module):
         )
         
         # ================== 修改核心结束 ==================
-        
+
         # hs 输出 shape: [100, Batch, 256]
         
         # 7. 预测头
         # 变回 [Batch, 100, 256]
         hs = hs.permute(1, 0, 2)
         
-        outputs_class = self.class_embed(hs)   # [Batch, 100, num_classes+1]
-        outputs_coord = self.bbox_embed(hs).sigmoid() # [Batch, 100, 4]
+        # [Batch, 100, num_classes+1]
+        outputs_class = self.class_embed(hs)            
+        
+        # [Batch, 100, 4]
+        outputs_coord = self.bbox_embed(hs).sigmoid()   
         
         return {'pred_logits': outputs_class, 'pred_boxes': outputs_coord}
 

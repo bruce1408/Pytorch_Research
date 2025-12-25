@@ -121,6 +121,7 @@ class DETR3D_Core(nn.Module):
         # 还要过滤掉 u,v 超出 [-1, 1] 的点
         valid_coords = (points_2d_norm[..., 0] > -1) & (points_2d_norm[..., 0] < 1) & \
                        (points_2d_norm[..., 1] > -1) & (points_2d_norm[..., 1] < 1)
+                       
         valid_coords = valid_coords.view(B, Q, N, 1)
         
         final_mask = mask & valid_coords
@@ -185,6 +186,14 @@ if __name__ == "__main__":
     fake_img_feats = torch.randn(B, N, C, H, W)
     
     # 2. 投影矩阵 (模拟)
+    # 正常情况下的变换结果是
+    # lidar2img = (相机内参矩阵) @ (相机外参矩阵) @ (Lidar到车身的变换矩阵)
+
+    # [ R_11  R_12  R_13 | t_x ]
+    # [ R_21  R_22  R_23 | t_y ]
+    # [ R_31  R_32  R_33 | t_z ]
+    # [ -----------------|---- ]
+    # [   0     0     0  |  1  ]
     fake_lidar2img = torch.eye(4).view(1, 1, 4, 4).expand(B, N, 4, 4)
     
     print("Step 1: 随机初始化 Query")

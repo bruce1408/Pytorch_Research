@@ -37,8 +37,8 @@ class DETR3D_Core(nn.Module):
         B, Q, _ = reference_points.shape
         N = self.num_cameras
         
-        # 简化坐标变换逻辑用于演示 (假设场景归一化在 0-1 之间)
-        points_3d = reference_points.unsqueeze(1).expand(-1, N, -1, -1) # (B, N, Q, 3)
+        # 简化坐标变换逻辑用于演示 (假设场景归一化在 0-1 之间) -> (B, N, Q, 3)
+        points_3d = reference_points.unsqueeze(1).expand(-1, N, -1, -1) 
         ones = torch.ones_like(points_3d[..., :1])
         points_3d_homo = torch.cat([points_3d, ones], dim=-1)
         
