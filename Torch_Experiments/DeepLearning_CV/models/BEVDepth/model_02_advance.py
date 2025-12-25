@@ -1,347 +1,290 @@
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
 
-
-# =========================
-# 1) 核心：DepthNet
-# =========================
-class DepthNet(nn.Module):
+# ==========================================
+# 1. 核心组件: Camera-Aware DepthNet
+# ==========================================
+class CameraAwareDepthNet(nn.Module):
     """
-    DepthNet 是 BEVDepth / LSS 中最核心的子网络之一。
-
-    它的职责不是做 BEV，也不是做检测，而是：
-      - 对每一个像素位置，预测一个【深度分布】（离散 D 个 bin）
-      - 同时输出该像素的【语义/上下文特征】，供后续 Lift 使用
-
-    输入:
-      img_feat: (B*N, Cin, Hf, Wf)
-        - B: batch size
-        - N: 相机数量
-        - Cin: 图像特征通道数（通常来自 backbone，如 256 / 512）
-        - Hf, Wf: 下采样后的特征图尺寸
-
-    输出:
-      depth_logits: (B*N, D, Hf, Wf)
-        - 对每个像素预测 D 个深度 bin 的 logits（分类）
-      context_feat: (B*N, Cout, Hf, Wf)
-        - 对应像素的语义特征（会被 Lift 到 3D）
+    BEVDepth 的核心: 相机参数感知的深度预测网络
     """
-
-    def __init__(self, in_channels: int, num_depth_bins: int, context_channels: int):
+    def __init__(self, in_channels=256, mid_channels=256, depth_bins=112):
         super().__init__()
-
-        # D = 深度离散 bin 数（如 41：4m~45m, step=1m）
-        self.D = num_depth_bins
-
-        # Cout = Lift 后 BEV 的通道数（如 64）
-        self.Cout = context_channels
-
-        # 一个中间隐藏通道数（经验设置，保证容量）
-        hidden = max(64, in_channels // 2)
-
-
-                # stem：共享的特征提取层
-        # 目的：
-        #   - 在分 depth/context 之前做一层特征“解耦”
-        #   - 让两个 head 使用同一份中间表征
-        self.stem = nn.Sequential(
-            nn.Conv2d(in_channels, hidden, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(hidden, hidden, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden),
+        self.depth_bins = depth_bins
+        
+        # [分支 A] 图像特征处理
+        # 简单的卷积层，用来调整特征通道和提取局部信息
+        self.reduce_conv = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
         )
+        
+        # [分支 B] 相机参数编码 (Camera-Awareness)
+        # 输入维度: 27 (例如: 9个内参 + 12个外参 + 6个增强参数)
+        self.bn_params = nn.BatchNorm1d(27)
+        self.depth_mlp = nn.Sequential(
+            nn.Linear(27, mid_channels),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(mid_channels, mid_channels),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True),
+        )
+        
+        # [融合] SE-Block 风格的注意力机制
+        # 利用相机参数生成的权重，对图像特征进行重加权 (Re-weighting)
+        self.se_attention = nn.Sequential(
+            nn.Linear(mid_channels, mid_channels),
+            nn.Sigmoid() 
+        )
+        
+        # [输出] 深度分类头
+        # 输出通道数 = 深度分桶的数量 (depth_bins)
+        self.depth_head = nn.Conv2d(mid_channels, depth_bins, kernel_size=1)
 
-
-        # 深度分类 head
-        # 输出 D 个通道，每个通道对应一个 depth bin 的 logit
-        self.depth_head = nn.Conv2d(hidden, self.D, kernel_size=1)
-
-        # 语义 / 上下文 head
-        # 输出 Cout 个通道，会在 Lift 阶段和 depth_prob 结合
-        self.context_head = nn.Conv2d(hidden, self.Cout, kernel_size=1)
-
-
-    def forward(self, img_feat: torch.Tensor):
+    def forward(self, x, mats):
         """
-        前向传播
-
-        输入:
-          img_feat: (B*N, Cin, Hf, Wf)
-
-        输出:
-          depth_logits: (B*N, D, Hf, Wf)
-          context_feat: (B*N, Cout, Hf, Wf)
+        参数:
+            x: (B * N_cam, C, H, W) 图像特征
+            mats: (B * N_cam, 27) 相机参数
+        返回:
+            depth_logits: (B * N_cam, depth_bins, H, W) 深度预测结果(未Softmax)
         """
-        x = self.stem(img_feat)
+        # 1. 处理图像特征
+        feat = self.reduce_conv(x)
+        
+        # 2. 处理相机参数
+        # 先归一化，再通过 MLP 提取上下文信息
+        mats = self.bn_params(mats)  # [12, 27] -> [12, 9内参 + 12外参 + 6增强参数]
+        context = self.depth_mlp(mats) # 形状: (B*N, mid_channels)  -> [12, 256]
+        
+        # 3. 关键步骤: 融合 (Camera-Aware Fusion)
+        # 将 context 扩展维度以便与 feat 进行广播乘法
+        attn_weight = self.se_attention(context).unsqueeze(-1).unsqueeze(-1) # (B*N, C, 1, 1) -> [12, 256, 1, 1]
+        feat = feat * attn_weight 
+        
+        # 4. 输出深度分布 Logits
+        depth_logits = self.depth_head(feat)
+        
+        return depth_logits
 
-        # 深度分支：分类 logits（还没 softmax）
-        depth_logits = self.depth_head(x)
-
-        # 语义分支：用于 Lift 的上下文特征
-        context_feat = self.context_head(x)
-
-        return depth_logits, context_feat
-
-
-
-# =========================
-# 2) Fake Dataset：随机特征 + 随机深度标签(带mask)
-# =========================
-class FakeDepthDataset(Dataset):
+# ==========================================
+# 2. 辅助组件: 简单的 LSS View Transformer
+# ==========================================
+# ==========================================
+# 2. 辅助组件: 内存安全的 LSS 模拟器
+# ==========================================
+class SimpleLSS(nn.Module):
     """
-    这是一个【教学 / 验证流程用】的数据集。
-
-    它模拟了 BEVDepth 训练 depth head 时所需的数据格式：
-      - 输入：图像特征（这里用随机数代替 backbone 输出）
-      - 监督：离散深度标签（bin id） + 有效 mask
-
-    注意：
-      - 在真实 BEVDepth 中，depth_gt 来自 LiDAR 投影
-      - valid mask 表示哪些像素真的被 LiDAR 覆盖
+    轻量化版 LSS 模块
+    注意：在真实生产环境中，这里必须使用 MMDetection3D 的 VoxelPooling CUDA 算子
+    此处为了演示流程跑通，我们使用 插值(Interpolation) 来替代显存爆炸的张量操作
     """
-
-    def __init__(
-        self,
-        length: int = 200,
-        num_cams: int = 6,
-        in_channels: int = 512,
-        Hf: int = 16,
-        Wf: int = 44,
-        num_depth_bins: int = 41,
-        valid_ratio: float = 0.7,   # 有效像素比例（模拟 LiDAR 稀疏性）
-        seed: int = 0
-    ):
+    def __init__(self, out_channels=256, depth_bins=112):
         super().__init__()
-        self.length = length
-        self.N = num_cams
-        self.Cin = in_channels
-        self.Hf, self.Wf = Hf, Wf
-        self.D = num_depth_bins
-        self.valid_ratio = valid_ratio
-        self.rng = torch.Generator().manual_seed(seed)
+        self.depth_bins = depth_bins
+        self.out_channels = out_channels
+        # 增加一个降维层，模拟从图像空间到BEV空间的特征压缩
+        self.bev_compress = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=2),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU()
+        )
 
+    def forward(self, img_feat, depth_logits):
+        """
+        img_feat: (B*N, C, H, W)
+        depth_logits: (B*N, D, H, W)
+        """
+        # 方案：直接将图像特征下采样到 BEV 的尺寸 (128x128)
+        # 这样避免了构建 (B, C, D, H, W) 的 5维张量
+        
+        # 1. 先把特征图缩小一点，模拟特征提取的stride
+        # 假设输入 256x704 -> 缩小到类似 BEV 的网格大小
+        # 这里我们直接强制插值到 128x128，模拟投影结果
+        bev_feat = F.interpolate(img_feat, size=(128, 128), mode='bilinear', align_corners=False)
+        
+        # 2. 利用深度信息加权 (可选，为了让 depth 参与计算)
+        # 我们可以计算深度的置信度，用来给特征加权
+        # 取深度图最大的概率值作为权重
+        with torch.no_grad():
+            depth_prob = F.softmax(depth_logits, dim=1) # (B*N, D, H, W)
+            # 在深度维度求 max，得到 (B*N, 1, H, W)
+            depth_confidence, _ = torch.max(depth_prob, dim=1, keepdim=True)
+            # 将权重也插值到 128x128
+            depth_weight = F.interpolate(depth_confidence, size=(128, 128), mode='bilinear')
+            
+        # 3. 特征加权
+        bev_feat = bev_feat * depth_weight
+        
+        return bev_feat # (B*N, C, 128, 128)
+
+# ==========================================
+# 3. 完整模型: BEVDepth
+# ==========================================
+class BEVDepthModel(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.length = length
-        self.N = num_cams
-        self.Cin = in_channels
-        self.Hf, self.Wf = Hf, Wf
-        self.D = num_depth_bins
-        self.valid_ratio = valid_ratio
-        self.rng = torch.Generator().manual_seed(seed)
+        # 模拟 Backbone (例如 ResNet-50)
+        # 输入假设是 3通道图片，输出 256通道特征
+        self.backbone = nn.Sequential(
+            nn.Conv2d(3, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU()
+        )
+        
+        # 核心: DepthNet，都是卷积层的堆叠
+        self.depth_net = CameraAwareDepthNet(in_channels=256, mid_channels=256, depth_bins=112)
+        
+        # 视图转换
+        self.view_transformer = SimpleLSS(out_channels=256, depth_bins=112)
+        
+        # 任务头 (例如 3D 检测头)
+        self.det_head = nn.Conv2d(256, 10, kernel_size=1) # 10个类别
 
+    def get_depth_loss(self, depth_logits, gt_depth):
+        """
+        显式深度监督 Loss (Explicit Depth Supervision)
+        """
+        # gt_depth: (B*N, H, W), 值为 0~111 的整数, -1 表示无效点(无激光雷达数据)
+        mask = gt_depth >= 0 
+        
+        # 只计算有效像素的 CrossEntropy Loss
+        if mask.sum() > 0:
+            # 展平以便计算 loss
+            valid_logits = depth_logits.permute(0, 2, 3, 1)[mask] # (N_valid, 112)
+            valid_gt = gt_depth[mask].long()                      # (N_valid,)
+            loss = F.cross_entropy(valid_logits, valid_gt)
+        else:
+            loss = torch.tensor(0.0, device=depth_logits.device, requires_grad=True)
+            
+        return loss
+
+    def forward(self, imgs, mats, gt_depth=None):
+        B, N, C, H, W = imgs.shape
+        # 将 Batch 和 Camera 维度合并
+        imgs = imgs.view(B * N, C, H, W)
+        mats = mats.view(B * N, -1)
+        
+        # 1. 提取特征 (B*N, 256, H, W) -> [12, 256, 128, 352]
+        feat = self.backbone(imgs) 
+        
+        # 2. 预测深度 (调用 DepthNet) # (B*N, 112, H, W)
+        depth_logits = self.depth_net(feat, mats) 
+        
+        # 3. 转换到 BEV [12, 256, 128, 128]
+        bev_feat_cam = self.view_transformer(feat, depth_logits)
+        
+        # 4. 多相机特征融合 (这里简单求和，实际需按几何位置拼接) -> [2, 256, 128, 128]
+        bev_feat = bev_feat_cam.view(B, N, 256, 128, 128).mean(dim=1)
+        
+        # 5. 检测头输出 2D 卷积输出10个类别
+        preds = self.det_head(bev_feat)
+        
+        # 6. 计算 Loss (如果是训练模式且有标签)
+        loss_dict = {}
+        if gt_depth is not None:
+            loss_depth = self.get_depth_loss(depth_logits, gt_depth.view(-1, H, W))
+            loss_dict['loss_depth'] = loss_depth
+            
+        return preds, loss_dict
+
+# ==========================================
+# 4. 数据模拟与训练流程
+# ==========================================
+class RandomDataset(Dataset):
+    def __init__(self, length=20):
+        self.length = length
+        
     def __len__(self):
         return self.length
-
-    def __getitem__(self, idx):
-        # -------------------------
-        # 1) 模拟 backbone 输出
-        # -------------------------
-        # img_feats: (N, Cin, Hf, Wf)
-        img_feats = torch.randn(self.N, self.Cin, self.Hf, self.Wf, generator=self.rng)
-
-                # -------------------------
-        # 2) 模拟深度标签
-        # -------------------------
-        # 每个像素一个 depth bin id ∈ [0, D-1]
-        # shape: (N, Hf, Wf)
-        depth_gt = torch.randint(
-            low=0, high=self.D,
-            size=(self.N, self.Hf, self.Wf),
-            generator=self.rng
-        )
-
-                # -------------------------
-        # 3) 模拟 LiDAR 有效 mask
-        # -------------------------
-        # 真实情况：LiDAR 投影非常稀疏
-        # valid=True 的像素才参与 loss
-        valid = (torch.rand(self.N, self.Hf, self.Wf, generator=self.rng) < self.valid_ratio)
-
-        return img_feats, depth_gt, valid
-
-        # 也可以模拟“越远越稀疏”：这里保持简单就行
-        return img_feats, depth_gt, valid
-
-
-# =========================
-# 3) loss：masked depth CE
-# =========================
-def masked_depth_ce(depth_logits: torch.Tensor,
-                    depth_gt: torch.Tensor,
-                    valid: torch.Tensor) -> torch.Tensor:
-    """
-    带 mask 的深度分类损失（BEVDepth 核心）
-
-    输入:
-      depth_logits: (B*N, D, H, W)
-      depth_gt:     (B*N, H, W)
-      valid:        (B*N, H, W)  bool
-
-    输出:
-      标量 loss
-    """
-
-    # 每个像素的 CE loss
-    # shape: (B*N, H, W)
-    per_pixel = F.cross_entropy(depth_logits, depth_gt, reduction="none")
-
-    # 只在 valid 像素上计算 loss
-    valid_f = valid.float()
-    denom = valid_f.sum().clamp(min=1.0)
-
-    loss = (per_pixel * valid_f).sum() / denom
-    return loss
-
-
-
-@torch.no_grad()
-def depth_metrics(depth_logits, depth_gt, valid):
-    """
-    计算两个直观指标（用于 sanity check）：
-
-    1) Top-1 Accuracy（在有效像素上）
-    2) 平均置信度（max softmax prob）
-    """
-
-    prob = F.softmax(depth_logits, dim=1)  # (BN,D,H,W)
-    pred = prob.argmax(dim=1)              # (BN,H,W)
-    conf = prob.max(dim=1).values          # (BN,H,W)
-
-    valid_f = valid.float()
-    denom = valid_f.sum().clamp(min=1.0)
-
-    acc = ((pred == depth_gt).float() * valid_f).sum() / denom
-    mean_conf = (conf * valid_f).sum() / denom
-    return float(acc.item()), float(mean_conf.item())
-
-
-# =========================
-# 4) 训练与验证
-# =========================
-def run_train_val(
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    epochs: int = 3,
-    batch_size: int = 8,
-    num_cams: int = 6,
-    Cin: int = 512,
-    Hf: int = 16,
-    Wf: int = 44,
-    D: int = 41,
-    Cout: int = 64,
-):
-    print(f"Using device: {device}")
-
-    # -------------------------
-    # 数据集 & DataLoader
-    # -------------------------
-    train_ds = FakeDepthDataset(length=400, num_cams=num_cams,
-                                in_channels=Cin, Hf=Hf, Wf=Wf,
-                                num_depth_bins=D, valid_ratio=0.7)
-
-    val_ds = FakeDepthDataset(length=120, num_cams=num_cams,
-                              in_channels=Cin, Hf=Hf, Wf=Wf,
-                              num_depth_bins=D, valid_ratio=0.7, seed=123)
-
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
-    val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
-
-    # -------------------------
-    # 模型 & 优化器
-    # -------------------------
-    model = DepthNet(Cin, D, Cout).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-
-    for ep in range(1, epochs + 1):
-        # -----------------
-        # train
-        # -----------------
-        model.train()
-        tr_loss = 0.0
-        tr_acc = 0.0
-        tr_conf = 0.0
-        n_batches = 0
-
-        for img_feats, depth_gt, valid in train_loader:
-            # img_feats: (B, N, Cin, Hf, Wf)
-            B, N, Cin_, H_, W_ = img_feats.shape
-            assert N == num_cams and Cin_ == Cin and H_ == Hf and W_ == Wf
-
-            img_feats = img_feats.to(device, non_blocking=True)
-            depth_gt = depth_gt.to(device, non_blocking=True).long()
-            valid = valid.to(device, non_blocking=True).bool()
-
-            # 变成 BN 维度（和真实实现一致：对每个相机独立做 depth）
-            img_feats_bn = img_feats.view(B * N, Cin, Hf, Wf)
-            depth_gt_bn = depth_gt.view(B * N, Hf, Wf)
-            valid_bn = valid.view(B * N, Hf, Wf)
-
-            depth_logits, context_feat = model(img_feats_bn)  # depth_logits: (BN,D,Hf,Wf), context: (BN,Cout,Hf,Wf)
-
-            # 只训练 depth（符合你的要求：核心 depthnet）
-            loss = masked_depth_ce(depth_logits, depth_gt_bn, valid_bn)
-
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            opt.step()
-
-            acc, conf = depth_metrics(depth_logits, depth_gt_bn, valid_bn)
-
-            tr_loss += float(loss.item())
-            tr_acc += acc
-            tr_conf += conf
-            n_batches += 1
         
-        tr_loss /= max(1, n_batches)
-        tr_acc /= max(1, n_batches)
-        tr_conf /= max(1, n_batches)
+    def __getitem__(self, idx):
+        # 原来是 256, 704 -> 改小为 128, 352
+        H_in, W_in = 128, 352 
+        
+        # 模拟数据
+        imgs = torch.randn(6, 3, H_in, W_in)
+        mats = torch.randn(6, 27)
+        
+        gt_depth = torch.randint(-1, 112, (6, H_in, W_in))
+        mask = torch.rand(6, H_in, W_in) > 0.1
+        gt_depth[mask] = -1
+        
+        gt_heatmap = torch.randn(10, 128, 128)
+        
+        return imgs, mats, gt_depth, gt_heatmap
 
-        # -----------------
-        # val
-        # -----------------
+def main():
+    # 设置设备
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Running on device: {device}")
+    
+    # 初始化模型和优化器
+    model = BEVDepthModel().to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+    
+    # 准备数据
+    train_loader = DataLoader(RandomDataset(length=10), batch_size=2)
+    val_loader = DataLoader(RandomDataset(length=4), batch_size=2)
+    
+    epochs = 2
+    
+    # --- 循环开始 ---
+    for epoch in range(epochs):
+        print(f"\n=== Epoch {epoch+1}/{epochs} ===")
+        
+        # 1. 训练阶段 (Training)
+        model.train()
+        train_loss_sum = 0
+        for batch_idx, (imgs, mats, gt_depth, gt_heatmap) in enumerate(train_loader):
+            # [2, 6, 3, 128, 352] [2, 6, 27]
+            imgs, mats = imgs.to(device), mats.to(device) 
+            
+            # [2, 6, 128, 352] [2, 10, 128, 128]
+            gt_depth, gt_heatmap = gt_depth.to(device), gt_heatmap.to(device) 
+            
+            optimizer.zero_grad()
+            
+            # 前向传播
+            preds, loss_dict = model(imgs, mats, gt_depth)
+            
+            # 计算总 Loss
+            # BEVDepth 论文强调深度监督的权重通常设得比较大 (比如 3.0)
+            loss_depth = loss_dict['loss_depth']
+            loss_det = F.mse_loss(preds, gt_heatmap) # 模拟检测 Loss
+            total_loss = loss_det + 3.0 * loss_depth
+            
+            # 反向传播
+            total_loss.backward()
+            optimizer.step()
+            
+            train_loss_sum += total_loss.item()
+            print(f" [Train] Batch {batch_idx}: Depth Loss={loss_depth.item():.4f}, Det Loss={loss_det.item():.4f}")
+            
+        print(f" -> Avg Train Loss: {train_loss_sum / len(train_loader):.4f}")
+        
+        # 2. 验证阶段 (Validation)
         model.eval()
-        va_loss = 0.0
-        va_acc = 0.0
-        va_conf = 0.0
-        n_batches = 0
-
-        with torch.no_grad():
-            for img_feats, depth_gt, valid in val_loader:
-                B, N, Cin_, H_, W_ = img_feats.shape
-                img_feats = img_feats.to(device, non_blocking=True)
-                depth_gt = depth_gt.to(device, non_blocking=True).long()
-                valid = valid.to(device, non_blocking=True).bool()
-
-                img_feats_bn = img_feats.view(B * N, Cin, Hf, Wf)
-                depth_gt_bn = depth_gt.view(B * N, Hf, Wf)
-                valid_bn = valid.view(B * N, Hf, Wf)
-
-                depth_logits, context_feat = model(img_feats_bn)
-                loss = masked_depth_ce(depth_logits, depth_gt_bn, valid_bn)
-                acc, conf = depth_metrics(depth_logits, depth_gt_bn, valid_bn)
-
-                va_loss += float(loss.item())
-                va_acc += acc
-                va_conf += conf
-                n_batches += 1
-
-        va_loss /= max(1, n_batches)
-        va_acc /= max(1, n_batches)
-        va_conf /= max(1, n_batches)
-
-        print(
-            f"Epoch {ep:02d}/{epochs} | "
-            f"train loss {tr_loss:.4f}, acc {tr_acc:.3f}, conf {tr_conf:.3f} | "
-            f"val loss {va_loss:.4f}, acc {va_acc:.3f}, conf {va_conf:.3f}"
-        )
-
-    return model
-
+        val_loss_sum = 0
+        with torch.no_grad(): # 验证不计算梯度，节省显存
+            for batch_idx, (imgs, mats, gt_depth, gt_heatmap) in enumerate(val_loader):
+                imgs, mats = imgs.to(device), mats.to(device)
+                gt_depth, gt_heatmap = gt_depth.to(device), gt_heatmap.to(device)
+                
+                preds, loss_dict = model(imgs, mats, gt_depth)
+                
+                loss_depth = loss_dict['loss_depth']
+                loss_det = F.mse_loss(preds, gt_heatmap)
+                total_loss = loss_det + 3.0 * loss_depth
+                
+                val_loss_sum += total_loss.item()
+                
+        print(f" -> Avg Val Loss: {val_loss_sum / len(val_loader):.4f}")
 
 if __name__ == "__main__":
-    run_train_val()
+    main()
