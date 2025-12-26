@@ -67,6 +67,7 @@ class MockLSS(nn.Module):
     def forward(self, imgs):
         # 假设输入 (B, N, C, H, W)
         B, N, _, _, _ = imgs.shape
+        
         # 简单模拟：Pooling + Resize
         feat = imgs.mean(dim=1) # (B, C, H, W)
         feat = F.interpolate(feat, size=self.bev_size)

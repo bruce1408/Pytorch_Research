@@ -13,110 +13,337 @@ class BEVAligner(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, prev_bev, trans, rot, bev_h, bev_w):
-        # trans: [dx, dy] (pixel), rot: [theta] (rad)
+    def forward(self, prev_bev, trans, rot):
+        # 注意：这里不需要传入 bev_h, bev_w，直接从 tensor 获取即可
         B, C, H, W = prev_bev.shape
+        
+        # 仿射变换矩阵
         theta = torch.zeros(B, 2, 3, device=prev_bev.device)
         cos_r, sin_r = torch.cos(rot).squeeze(1), torch.sin(rot).squeeze(1)
         
         theta[:, 0, 0], theta[:, 0, 1] = cos_r, -sin_r
-        theta[:, 1, 0], theta[:, 1, 1] = sin_r, cos_r
-        theta[:, 0, 2] = trans[:, 0] / (W / 2.0) # Pixel to Normalized Grid
+        theta[:, 1, 0], theta[:, 1, 1] = sin_r, cos_r        
+        # 将像素位移转换为归一化坐标 (-1 ~ 1)
+        theta[:, 0, 2] = trans[:, 0] / (W / 2.0) 
         theta[:, 1, 2] = trans[:, 1] / (H / 2.0)
         
         grid = F.affine_grid(theta, size=(B, C, H, W), align_corners=False)
         return F.grid_sample(prev_bev, grid, align_corners=False, padding_mode='zeros')
 
+class LSSViewTransformer(nn.Module):
+    def __init__(self, grid_conf, data_conf, downsample=16, num_depth_bins=118):
+        """
+        初始化 LSS 视图转换器
+        :param grid_conf: BEV 网格配置 {'xbound': [-51.2, 51.2, 0.8], 'ybound': ..., 'zbound': ...}
+        :param data_conf: 数据配置 {'input_size': [256, 704], ...}
+        :param downsample: 特征图下采样倍率 (默认16，即输入256x704 -> 特征16x44)
+        :param num_depth_bins: 深度桶数量 (D)
+        """
+        super().__init__()
+        self.grid_conf = grid_conf
+        self.data_conf = data_conf
+        self.downsample = downsample
+        self.D = num_depth_bins
+        self.C = 64  # 输出 BEV 特征维度
+
+        # 1. 准备 Frustum (视锥)
+        # 生成固定的 (D, H_feat, W_feat, 3) 的网格
+        self.frustum = self.create_frustum()
+
+        # 2. DepthNet
+        # 输入: Image Feature (C_in=256 or 512), 输出: Depth(D) + Context(C)
+        self.depth_net = nn.Conv2d(256, self.D + self.C, kernel_size=1, padding=0)
+
+    def create_frustum(self):
+        """生成视锥网格 (D, H, W, 3)"""
+        # 1. 解析图像尺寸和深度范围
+        img_H, img_W = self.data_conf['input_size']
+        feat_H, feat_W = img_H // self.downsample, img_W // self.downsample
+        
+        # 2. 生成深度网格 D
+        d_min, d_max, d_step = 4.0, 45.0, 1.0 # 示例参数
+        ds = torch.arange(d_min, d_max, d_step).view(-1, 1, 1).expand(-1, feat_H, feat_W)
+        self.D = ds.shape[0]
+
+        # 3. 生成像素坐标网格 (u, v)
+        # 注意：要映射回原图坐标，所以要乘以 downsample
+        xs = torch.linspace(0, img_W - 1, feat_W).view(1, 1, feat_W).expand(self.D, feat_H, -1)
+        ys = torch.linspace(0, img_H - 1, feat_H).view(1, feat_H, 1).expand(self.D, -1, feat_W)
+
+        # 4. 堆叠成 (D, H, W, 3) -> (u, v, d)
+        # 最后一维是 3: x(u), y(v), z(depth)
+        frustum = torch.stack((xs, ys, ds), -1)
+        return nn.Parameter(frustum, requires_grad=False)
+
+    def get_geometry(self, rots, trans, intrins, post_rots, post_trans):
+        """
+        几何投影: 将视锥点从 像素坐标 -> 自车坐标
+        """
+        B, N, _ = trans.shape
+        
+        # 1. 抵消数据增强 (Resize/Crop/Rotate 的逆变换)
+        # Undo post-transformation
+        # formula: x = (x_img - post_trans) @ inv(post_rot)
+        points = self.frustum - post_trans.view(B, N, 1, 1, 1, 3)
+        points = torch.inverse(post_rots).view(B, N, 1, 1, 1, 3, 3).matmul(points.unsqueeze(-1))
+        
+        # 2. 图像平面 -> 相机坐标系
+        # formula: x_cam = x_img * depth * inv(intrinsic)
+        points = torch.cat((points[:, :, :, :, :, :2] * points[:, :, :, :, :, 2:3], 
+                            points[:, :, :, :, :, 2:3]), 5)
+        
+        # 结合内参
+        combined_transform = rots.matmul(torch.inverse(intrins))
+        points = combined_transform.view(B, N, 1, 1, 1, 3, 3).matmul(points).squeeze(-1)
+        
+        # 3. 相机坐标系 -> 自车坐标系 (Ego)
+        # formula: x_ego = rot * x_cam + trans
+        points += trans.view(B, N, 1, 1, 1, 3)
+        
+        # Output: (B, N, D, H, W, 3) [x_ego, y_ego, z_ego]
+        return points
+
+    def voxel_pooling(self, geom_feats, x):
+        """
+        [关键] Voxel Pooling 使用 CumSum Trick 实现
+        geom_feats: (B, N, D, H, W, 3) 坐标
+        x: (B, N, D, H, W, C) 特征
+        """
+        B, N, D, H, W, C = x.shape
+        Nprime = B * N * D * H * W
+
+        # 1. 展平数据
+        x = x.reshape(Nprime, C)
+        geom_feats = geom_feats.reshape(Nprime, 3)
+
+        # 2. 过滤无效点 (超出 BEV 边界的点)
+        # 解析 grid 配置
+        dx, bx, nx = self.gen_dx_bx(self.grid_conf['xbound'], self.grid_conf['ybound'], self.grid_conf['zbound'])
+        
+        # 计算 grid index
+        # index = (coord - start) / resolution
+        geom_feats = ((geom_feats - (bx - dx/2.)) / dx).long()
+        
+        # 转换成 1D index 用于排序
+        geom_feats = geom_feats[:, 0] + geom_feats[:, 1] * nx[0] + geom_feats[:, 2] * nx[0] * nx[1]
+        geom_feats = geom_feats.long()
+
+        # 生成 mask: 仅保留在 grid 范围内的点
+        ranks = geom_feats
+        kept = (ranks >= 0) & (ranks < nx[0] * nx[1] * nx[2])
+        x = x[kept]
+        ranks = ranks[kept]
+
+        # 3. 排序 (Sorting) - 这是 CumSum 的前提
+        # 将落在同一个格子的点排在一起
+        ranks, indices = ranks.sort()
+        x = x[indices]
+        
+        # 4. CumSum Trick (核心加速)
+        # 通过前缀和快速计算同一个格子内的特征总和
+        feat_cumsum = torch.cumsum(x, dim=0)
+        
+        # 找边界: 只要 ranks[i] != ranks[i+1]，说明换格子了
+        mask = torch.ones(ranks.shape, device=x.device, dtype=torch.bool)
+        mask[:-1] = (ranks[1:] != ranks[:-1])
+        
+        # 算出每个格子的 sum
+        # sum[i] = cumsum[end_i] - cumsum[start_i - 1]
+        feat_cumsum = torch.cat([torch.zeros((1, C), device=x.device), feat_cumsum], dim=0)
+        final_feats = feat_cumsum[1:][mask] - feat_cumsum[:-1][mask] # 得到每个 voxel 的特征和
+        final_ranks = ranks[mask] # 得到去重后的 voxel index
+
+        # 5. 填回 BEV Grid
+        # 初始化全 0 的 BEV
+        bev_feat = torch.zeros((B, nx[2], nx[1], nx[0], C), device=x.device)
+        
+        # 此时 final_ranks 包含 batch 信息，需要拆解
+        # 这里简化为 B=1 的情况，多 Batch 需要把 Batch 索引加入 ranks 计算
+        # 为了通用性，通常把 Batch 算进 ranks 里
+        
+        # 简单填入 (Flatten View)
+        bev_flat = torch.zeros((nx[0]*nx[1]*nx[2], C), device=x.device)
+        bev_flat[final_ranks] = final_feats
+        
+        # Reshape 回 BEV 形状 (H_bev, W_bev, C)
+        # 注意: LSS 通常会 collapse Z 轴 (nx[2]=1)
+        bev_feat = bev_flat.view(nx[2], nx[1], nx[0], C)
+        
+        # 调整为 (B, C, H, W) 格式
+        bev_feat = bev_feat.permute(0, 3, 1, 2).contiguous() # (1, C, H, W)
+        
+        # 如果是多 Batch，需要在上面 ranks 计算时加入 batch_offset，这里做了简化
+        if B > 1:
+            # 真实代码需处理 Batch 偏移，这里为了演示逻辑略过
+            pass
+            
+        return bev_feat
+
+    def gen_dx_bx(self, xbound, ybound, zbound):
+        # 辅助函数: 计算网格分辨率(dx), 起点(bx), 尺寸(nx)
+        dx = torch.tensor([row[2] for row in [xbound, ybound, zbound]], dtype=torch.float, device=self.frustum.device)
+        bx = torch.tensor([row[0] + row[2]/2.0 for row in [xbound, ybound, zbound]], dtype=torch.float, device=self.frustum.device)
+        nx = torch.tensor([(row[1] - row[0]) / row[2] for row in [xbound, ybound, zbound]], dtype=torch.long, device=self.frustum.device)
+        return dx, bx, nx
+
+    def forward(self, x, rots, trans, intrins, post_rots, post_trans):
+        """
+        :param x: 图像特征 (B, N, C_in, H, W)
+        :param rots, trans: 外参
+        :param intrins: 内参
+        :param post_rots, post_trans: 数据增强参数
+        """
+        B, N, C_in, H, W = x.shape
+        
+        # 1. Lift: 推理深度 + 上下文
+        x = x.view(B * N, C_in, H, W)
+        x = self.depth_net(x) # (B*N, D+C, H, W)
+        
+        # 拆分 depth (Softmax) 和 context
+        depth_digit = x[:, :self.D].softmax(dim=1)
+        context = x[:, self.D:]
+        
+        # 外积: 生成视锥点云特征 (Frustum Features)
+        # (B*N, C, 1, H, W) * (B*N, 1, D, H, W) -> (B*N, C, D, H, W)
+        outer = context.unsqueeze(2) * depth_digit.unsqueeze(1)
+        
+        # 调整形状 -> (B, N, D, H, W, C)
+        outer = outer.view(B, N, self.C, self.D, H, W).permute(0, 1, 3, 4, 5, 2)
+        
+        # 2. Splat: 计算几何坐标
+        geom = self.get_geometry(rots, trans, intrins, post_rots, post_trans)
+        
+        # 3. Shoot: Voxel Pooling
+        bev_feat = self.voxel_pooling(geom, outer)
+        
+        return bev_feat
+
 class BEVDet4D(nn.Module):
     def __init__(self, bev_c=64, num_classes=1):
         super().__init__()
-        # 注意：这里模拟 LSS，先降维再池化到 BEV 大小
-        self.lss_conv = nn.Conv2d(256, bev_c, 1)
-        self.lss_pool = nn.AdaptiveAvgPool2d((128, 128))
         
+        # --- 1. 极简 Backbone ---
+        # 目标: 将 (3, 256, 704) -> (256, 16, 44)
+        # 计算: 256/16 = 16. 我们需要 16 倍下采样。
+        # 实现: 使用一个 stride=16, kernel_size=16 的卷积层直接完成提取+下采样
+        self.backbone = nn.Sequential(
+            nn.Conv2d(3, 256, kernel_size=16, stride=16, padding=0),
+            nn.BatchNorm2d(256),
+            nn.ReLU()
+        )
+
+        # --- 2. LSS ---
+        grid_conf = {
+            'xbound': [-51.2, 51.2, 0.8], 
+            'ybound': [-51.2, 51.2, 0.8], 
+            'zbound': [-10.0, 10.0, 20.0]
+        }
+        
+        data_conf = {'input_size': [256, 704]}
+        
+        self.lss = LSSViewTransformer(grid_conf, data_conf, num_depth_bins=50)        
+        
+        # --- 3. 对齐与融合 ---
         self.aligner = BEVAligner()
+        
         self.encoder = nn.Sequential(
             nn.Conv2d(bev_c * 2, bev_c, 3, padding=1),
-            nn.BatchNorm2d(bev_c), nn.ReLU()
+            nn.BatchNorm2d(bev_c),
+            nn.ReLU()
         )
-        # Head 输出: [heatmap(1), offset_x, offset_y, w, l, sin, cos] = 7 channels
+        
         self.head = nn.Conv2d(bev_c, num_classes + 6, 1) 
 
-    def forward(self, imgs, prev_bev=None, trans=None, rot=None):
-        # imgs shape: (B, N, C, H, W) -> [4, 6, 256, 16, 44]
+    def forward_single_frame(self, imgs, mats_dict):
+        # imgs shape: (B, N, 3, 256, 704)
         B, N, C, H, W = imgs.shape
         
-        # 1. 维度变换: (B, N, C, H, W) -> (B*N, C, H, W)
-        imgs_reshaped = imgs.view(B * N, C, H, W)
+        # 1. Flatten Batch & N to pass through Backbone
+        imgs = imgs.view(B * N, C, H, W)
         
-        # 2. 提取特征 (模拟 LSS 的 Lift 和 Splat)
-        # 结果 shape: (B*N, 64, 128, 128)
-        feats = self.lss_conv(imgs_reshaped)
-        feats = self.lss_pool(feats)
+        # 2. Extract Features
+        # Output: (B*N, 256, 16, 44)
+        feats = self.backbone(imgs)
         
-        # 3. 维度还原并聚合: (B*N, 64, ...) -> (B, N, 64, ...) -> (B, 64, ...)
-        # 这里简单使用 mean() 模拟 Voxel Pooling 将多视角特征融合为一张 BEV
-        curr_bev = feats.view(B, N, -1, 128, 128).mean(dim=1)
+        # 3. Reshape back for LSS
+        feats = feats.view(B, N, 256, feats.shape[2], feats.shape[3])
         
-        # 4. 时序融合 (Temporal Fusion)
+        # 4. LSS Transform
+        bev = self.lss(feats, 
+                       mats_dict['rots'], mats_dict['trans'], 
+                       mats_dict['intrins'], 
+                       mats_dict['post_rots'], mats_dict['post_trans'])
+        return bev
+    
+    def forward(self, curr_imgs, curr_mats, prev_bev=None, ego_trans=None, ego_rot=None):
+        # Step 1: 当前帧生成 BEV [1, 64, 128, 128]
+        curr_bev = self.forward_single_frame(curr_imgs, curr_mats)
+        
+        # Step 2: 时序融合
         if prev_bev is not None:
-            # 确保维度匹配，aligner 需要 (B, C, H, W)
-            aligned_prev = self.aligner(prev_bev, trans, rot, 128, 128)
+            aligned_prev = self.aligner(prev_bev, ego_trans, ego_rot)
             feat = torch.cat([curr_bev, aligned_prev], dim=1)
         else:
-            # 第一帧，没有历史，自己拼自己 (填充)
             feat = torch.cat([curr_bev, curr_bev], dim=1)
-            
-        # 5. BEV Encoder & Head
+        # [1, 64, 128, 128]
         feat = self.encoder(feat)
-        output = self.head(feat) # (B, 7, 128, 128)
-        
-        # 返回 output 用于算 Loss, 返回 curr_bev.detach() 用于存入 History
+        output = self.head(feat)  # [1, 7, 128, 128]
         return output, curr_bev.detach()
 
 # ==========================================
-# 2. 数据集模拟 (MockNuScenesSequence)
+# 4. 增强版 Dataset (生成相机参数)
 # ==========================================
 class TemporalDataset(Dataset):
-    def __init__(self, length=100):
+    def __init__(self, length=20):
         self.length = length
-        self.voxel_size = 0.5 # 0.5米/像素
-        self.bev_size = 128   # 128x128 像素
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, idx):
-        # 1. 模拟当前帧图像
-        # Shape: (6, C, H, W) -> 这里简化 C=256 特征图
-        curr_imgs = torch.randn(6, 256, 16, 44) 
+        # 1. 图像 (6张, 3通道, 256x704)
+        curr_imgs = torch.randn(6, 3, 256, 704)
+        # 实际上 LSS 不需要上一帧的 Raw Image，只需要上一帧的 BEV Feature
+        # 为了模拟训练中的 Teacher Forcing，我们生成 prev_imgs 用于提取 prev_bev
+        prev_imgs = torch.randn(6, 3, 256, 704)
         
-        # 2. 模拟 Ego-Motion (当前帧相对于上一帧的运动)
-        # 假设车往前开了 2 米 (dy=4 pixels), 转了 0.1 rad
-        dx_meter, dy_meter = 0.5, 2.0 
+        # 2. 生成 LSS 必须的 5 个矩阵 (Mock Data)
+        # 真实场景中，这些需要从 nuScenes 的 calib 文件读取
+        
+        # 相机外参 (Camera -> Ego)
+        rots = torch.eye(3).view(1, 3, 3).repeat(6, 1, 1)
+        trans = torch.zeros(6, 3)
+        
+        # 相机内参 (Pixel -> Camera)
+        # fx=500, fy=500, cx=352, cy=128
+        intrins = torch.eye(3).view(1, 3, 3).repeat(6, 1, 1)
+        intrins[:, 0, 0] = 500
+        intrins[:, 1, 1] = 500
+        intrins[:, 0, 2] = 352
+        intrins[:, 1, 2] = 128
+        
+        # 数据增强矩阵 (Identity for now)
+        post_rots = torch.eye(3).view(1, 3, 3).repeat(6, 1, 1)
+        post_trans = torch.zeros(6, 3)
+
+        # 3. 自车运动 (Ego Motion)
+        dx_pixel, dy_pixel = 1.0, 4.0 
         d_theta = 0.1
+        ego_trans = torch.tensor([dx_pixel, dy_pixel]) # 像素单位
+        ego_rot = torch.tensor([d_theta])
         
-        # 转换为像素单位传给模型
-        trans_pixel = torch.tensor([dx_meter / self.voxel_size, dy_meter / self.voxel_size]) # [1, 4]
-        rot_rad = torch.tensor([d_theta])
-
-        # 3. 模拟上一帧图像 (实际训练中，需要读取上一帧数据)
-        # 这里为了演示，我们假设上一帧图像稍有不同
-        prev_imgs = curr_imgs + torch.randn_like(curr_imgs) * 0.1
-
-        # 4. 生成 Ground Truth (Target)
-        # 假设当前帧有一个物体在 BEV 中心 (64, 64)
-        # [class_id, x, y, w, l, yaw]
+        # GT Box (Mock)
         gt_box = torch.tensor([0, 64.0, 64.0, 4.0, 2.0, 0.5]) 
-        
+
         return {
             'curr_imgs': curr_imgs,
-            'prev_imgs': prev_imgs, # 真实训练中通常通过 Sequential Sampler 获取
-            'trans': trans_pixel,
-            'rot': rot_rad,
-            'gt_box': gt_box
+            'prev_imgs': prev_imgs,
+            'mats': {
+                'rots': rots, 'trans': trans, 'intrins': intrins,
+                'post_rots': post_rots, 'post_trans': post_trans
+            },
+            'ego_trans': ego_trans, 'ego_rot': ego_rot, 'gt_box': gt_box
         }
-
 # ==========================================
 # 3. Loss 函数 (Gaussian Focal Loss + L1)
 # ==========================================
@@ -246,6 +473,7 @@ def validate(model, loader, criterion, device):
             
             # 推理上一帧
             _, prev_bev_feat = model(prev_imgs, prev_bev=None)
+            
             # 推理当前帧
             preds, _ = model(curr_imgs, prev_bev=prev_bev_feat, trans=trans, rot=rot)
             
@@ -281,38 +509,50 @@ def validate(model, loader, criterion, device):
 # ==========================================
 # 5. 主程序入口
 # ==========================================
-def main_pipeline():
-    # 配置
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    BATCH_SIZE = 4
-    LR = 1e-3
-    EPOCHS = 5
+def main():
+    device = torch.device("cpu") # LSS 的 CumSum 可以在 CPU 跑，但建议 GPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
     
-    print(f"Starting BEVDet4D Training Pipeline on {device}...")
+    print(f"Running Real-LSS BEVDet4D on {device}...")
     
-    # 1. 实例化 Dataset & DataLoader
-    train_set = TemporalDataset(length=100)
-    val_set = TemporalDataset(length=20)
-    
-    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
-    
-    # 2. 实例化模型、Loss、优化器
+    # 1. 只有 batch_size=1 时，简单的 CumSum 代码才不会报错
+    # 如果要支持 Batch > 1，需要修改 LSS 中的 ranks 处理逻辑
+    loader = DataLoader(TemporalDataset(), batch_size=1, shuffle=True)
     model = BEVDet4D().to(device)
-    criterion = CenterHeadLoss().to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=LR)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
     
-    # 3. 循环 Epoch
-    for epoch in range(EPOCHS):
-        print(f"\n--- Epoch {epoch+1}/{EPOCHS} ---")
+    for i, batch in enumerate(loader):
+        # 准备数据 [1, 6, 3, 256, 704]
+        curr_imgs = batch['curr_imgs'].to(device)
+        prev_imgs = batch['prev_imgs'].to(device)
         
-        # Train
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        # 解包相机参数
+        mats = batch['mats']
+        curr_mats = {k: v.to(device) for k, v in mats.items()}
         
-        # Validate
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        ego_trans = batch['ego_trans'].to(device).float()
+        ego_rot = batch['ego_rot'].to(device).float()
         
-        print(f"Epoch Summary: Train Loss={train_loss:.4f} | Val Loss={val_loss:.4f} | Val Acc (Peak Hit)={val_acc*100:.1f}%")
-
+        # --- Step 1: 获取上一帧 BEV (Teacher Forcing) ---
+        with torch.no_grad():
+            # 上一帧也需要过一遍模型来获得 BEV，这里复用 curr_mats 简化
+            prev_bev = model.forward_single_frame(prev_imgs, curr_mats)
+        
+        # --- Step 2: 前向传播 ---
+        preds, _ = model(curr_imgs, curr_mats, prev_bev, ego_trans, ego_rot)
+        
+        # --- Step 3: 简单计算 Loss ---
+        # 只要 preds 有输出，且 shape 是 (B, 7, 128, 128)，说明 pipeline 通了
+        loss = preds.sum() 
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        print(f"Iter {i}: BEV Shape {preds.shape}, Loss {loss.item():.4f}")
+        if i >= 2: break # 跑几步测试即可
+        
+        
 if __name__ == "__main__":
-    main_pipeline()
+    main()
