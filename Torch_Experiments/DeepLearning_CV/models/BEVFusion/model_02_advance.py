@@ -76,45 +76,50 @@ class LSSViewTransformer(nn.Module):
         return nn.Parameter(frustum, requires_grad=False)
 
     def get_geometry(self, rots, trans, intrins):
-        # 几何投影: Pixel (u,v,d) -> World (x,y,z)
         B, N, _ = trans.shape
         D, H, W, _ = self.frustum.shape
-        
-        # (1, 1, D, H, W, 3) -> (B, N, D, H, W, 3)
-        points = self.frustum.view(1, 1, D, H, W, 3).repeat(B, N, 1, 1, 1, 1)
-        
-        # Pixel -> Camera
-        # 利用相似三角形原理 x = u * z / f
-        points = torch.cat((points[:, :, :, :, :, :2] * points[:, :, :, :, :, 2:3], 
-                            points[:, :, :, :, :, 2:3]), 5)
-        
-        combined_transform = rots.matmul(torch.inverse(intrins))
-        points = combined_transform.view(B, N, 1, 1, 1, 3, 3).matmul(points.unsqueeze(-1)).squeeze(-1)
-        
-        # Camera -> Ego (World)
-        points += trans.view(B, N, 1, 1, 1, 3)
-        
-        return points
+
+        # frustum: (D,H,W,3) = [u, v, d]
+        points = self.frustum.view(1,1,D,H,W,3).repeat(B,N,1,1,1,1)
+
+        u = points[..., 0:1]
+        v = points[..., 1:2]
+        d = points[..., 2:3]
+
+        ones = torch.ones_like(u)
+        uv1 = torch.cat([u, v, ones], dim=-1)  # (B,N,D,H,W,3)
+
+        # cam ray = K^{-1} [u,v,1]
+        Kinv = torch.inverse(intrins)  # (B,N,3,3)
+        cam_ray = Kinv.view(B,N,1,1,1,3,3).matmul(uv1.unsqueeze(-1)).squeeze(-1)  # (...,3)
+
+        # scale by depth: (X,Y,Z) = d * ray
+        pts_cam = cam_ray * d  # (B,N,D,H,W,3)
+
+        # cam -> ego: pts_ego = R * pts_cam + t
+        pts_ego = rots.view(B,N,1,1,1,3,3).matmul(pts_cam.unsqueeze(-1)).squeeze(-1)
+        pts_ego = pts_ego + trans.view(B,N,1,1,1,3)
+
+        return pts_ego
+
 
     def voxel_pooling(self, geom_feats, x):
-        # LSS 的核心: 将离散点聚合到 BEV 网格
         B, N, D, H, W, C = x.shape
         Nprime = B * N * D * H * W 
 
-        # Flatten
+        # 1. Flatten
         x = x.reshape(Nprime, C)
         geom_feats = geom_feats.reshape(Nprime, 3)
 
-        # 转换到网格坐标
+        # 2. Filter Out-of-bounds
+        # 使用整数提取维度，避免 zeros 报错
         dx, bx, nx = self.dx.to(x.device), self.bx.to(x.device), self.nx.to(x.device)
-        
-        # 提取整数维度 (修复之前的报错)
-        nx_int, ny_int, nz_int = nx[0].long().item(), nx[1].long().item(), nx[2].long().item()
+        nx_int = int(nx[0].item())
+        ny_int = int(nx[1].item())
+        nz_int = int(nx[2].item())
 
-        # 量化坐标 (Physical -> Grid Index)
         geom_feats = ((geom_feats - (bx - dx/2.)) / dx).long()
         
-        # 过滤出界点
         kept = (geom_feats[:, 0] >= 0) & (geom_feats[:, 0] < nx[0]) & \
                (geom_feats[:, 1] >= 0) & (geom_feats[:, 1] < nx[1]) & \
                (geom_feats[:, 2] >= 0) & (geom_feats[:, 2] < nx[2])
@@ -122,8 +127,8 @@ class LSSViewTransformer(nn.Module):
         x = x[kept]
         geom_feats = geom_feats[kept]
         
-        # 计算 Rank 用于排序
-        # Rank = Batch_ID * Size + Z * Size + Y * Size + X
+        # 3. Calculate Ranks (Batch + Z + Y + X)
+        # 构造 Batch 索引
         batch_ix = torch.cat([torch.full([N*D*H*W], i, device=x.device, dtype=torch.long) for i in range(B)])
         batch_ix = batch_ix[kept]
         
@@ -132,32 +137,43 @@ class LSSViewTransformer(nn.Module):
                  geom_feats[:, 1] * nx[0] + 
                  geom_feats[:, 2] * nx[0] * nx[1]).long()
         
-        # 排序
+        # 4. Sort (关键步骤)
         sorts = ranks.argsort()
         x, ranks = x[sorts], ranks[sorts]
         
-        # CumSum Trick (并行求和)
-        if len(ranks) == 0:
-            return torch.zeros((B, self.out_C, ny_int, nx_int), device=x.device)
+        # 5. CumSum Trick (修正版)
+        # 5. Segment Sum via start/end indices (recommended)
+        if ranks.numel() == 0:
+            return torch.zeros((B, self.out_C, ny_int, nx_int), device=x.device, dtype=x.dtype)
 
-        kept_mask = torch.ones(ranks.shape[0], device=x.device, dtype=torch.bool)
-        kept_mask[:-1] = (ranks[1:] != ranks[:-1])
-        
+        # is_end[i]=True means i is the last element of a segment
+        is_end = torch.ones_like(ranks, dtype=torch.bool)
+        is_end[:-1] = ranks[1:] != ranks[:-1]
+        end_idx = torch.where(is_end)[0]                      # (K,)
+
+        # start_idx: first element index of each segment
+        start_idx = torch.cat([end_idx.new_zeros(1), end_idx[:-1] + 1], dim=0)
+
+        # padded cumsum
         cumsum = torch.cumsum(x, dim=0)
-        cumsum = torch.cat([torch.zeros((1, C), device=x.device), cumsum], dim=0)
+        cumsum = torch.cat([torch.zeros_like(cumsum[:1]), cumsum], dim=0)  # (M+1,C)
+
+        # segment sum: cumsum[end+1] - cumsum[start]
+        voxel_feats = cumsum[end_idx + 1] - cumsum[start_idx]
+
+        # ranks for each segment = ranks[end_idx]
+        voxel_ranks = ranks[end_idx]
+
         
-        voxel_feats = cumsum[1:][kept_mask] - cumsum[:-1][kept_mask]
-        voxel_ranks = ranks[kept_mask]
-        
-        # 填回 BEV
+        # 6. Scatter to BEV Grid
         flat_size = B * nz_int * ny_int * nx_int
         final_bev = torch.zeros((flat_size, C), device=x.device)
+        
         final_bev[voxel_ranks] = voxel_feats
         
-        # Reshape & Collapse Z
         final_bev = final_bev.view(B, nz_int, ny_int, nx_int, C)
         final_bev = final_bev.permute(0, 4, 1, 2, 3).contiguous() 
-        final_bev = final_bev.sum(2) # Sum pooling along Z
+        final_bev = final_bev.sum(2) # Collapse Z
         
         return final_bev
 
