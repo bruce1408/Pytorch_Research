@@ -256,7 +256,7 @@ def main():
     
     # --- Mock Data ---
     B = 1
-    # 相机数据: 6张图, 256x704尺寸太大，变成 128*352
+    # 相机数据: 6张图, 256x704 尺寸太大，变成 128*352
     imgs = torch.randn(B, 6, 3, 128, 352).to(device)
     # 模拟相机参数 (Identity)
     rots = torch.eye(3).view(1, 1, 3, 3).repeat(B, 6, 1, 1).to(device)
