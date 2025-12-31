@@ -49,7 +49,8 @@ class SimpleBackbone(nn.Module):
             nn.Conv2d(64, 128, 3, 2, 1), nn.ReLU(True),
             nn.Conv2d(128, cfg.embed_dim, 3, 2, 1), nn.ReLU(True),
         )
-    def forward(self, x): return self.net(x)
+    def forward(self, x): 
+        return self.net(x)
 
 # =========================================================
 # 3) StreamPETR 核心模型
@@ -62,12 +63,16 @@ class StreamPETR(nn.Module):
         
         # --- 3D 坐标生成相关 (PETR Legacy) ---
         self.feat_h, self.feat_w = cfg.img_h // cfg.stride, cfg.img_w // cfg.stride
+        
         ys, xs = torch.meshgrid(
             torch.arange(self.feat_h, dtype=torch.float32) + 0.5,
             torch.arange(self.feat_w, dtype=torch.float32) + 0.5, indexing='ij'
         )
+        
         grid_uv = torch.stack([xs * cfg.stride, ys * cfg.stride], dim=-1)
+        
         self.register_buffer("grid_uv", grid_uv, persistent=False)
+        
         self.register_buffer("depth_values", torch.tensor(cfg.depth_values).view(1,1,1,cfg.num_depth), persistent=False)
 
         # 3D PE Encoder (用于图像特征)
@@ -228,13 +233,14 @@ class StreamPETR(nn.Module):
         
         # 4. Transformer Decoder
         # Query 带着刚才算好的位置，去图像特征里找东西
-        hs = self.decoder(tgt, memory) # (N_all, B, C)
+        hs = self.decoder(tgt, memory) # (N_all, B, C) Q = tgt, k = v = memory
         hs = hs.permute(1, 0, 2) # (B, N_all, C)
         
         # 5. Prediction Heads
         # 回归框 (x,y,z,w,l,h...)
         # 注意：这里回归的是相对于 active_ref_pts 的偏移量
         tmp_boxes = self.reg_head(hs) 
+        
         # 恢复绝对坐标 (简化写法: ref + offset)
         # 真实实现需处理 inverse_sigmoid(ref) + tmp_boxes
         pred_boxes = tmp_boxes 
@@ -295,7 +301,12 @@ def main():
     ego_motion[:, 0, 3] = -1.0 # x 轴平移 -1 (相对运动)
     
     # 把 state_0 传进去
-    logits_1, boxes_1, state_1 = model(imgs_1, rots, trans, intrins, ego_motion=ego_motion, prev_state=state_0)
+    logits_1, boxes_1, state_1 = model(imgs_1, 
+                                       rots,
+                                       trans,
+                                       intrins,
+                                       ego_motion=ego_motion,
+                                       prev_state=state_0)
     
     # 注意 Frame 1 的 Query 数量 = New(256) + Old(256) = 512 (如果是推理阶段)
     # 在这个 Demo 里 select_top_k 限制了传下去的只有 256
