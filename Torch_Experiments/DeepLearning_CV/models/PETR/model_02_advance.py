@@ -95,8 +95,11 @@ class SimpleBackbone(nn.Module):
 # =========================================================
 class PETR(nn.Module):
     def __init__(self, cfg: PETRConfig):
+        
         super().__init__()
+        
         self.cfg = cfg
+        
         self.backbone = SimpleBackbone(cfg)
 
         # 计算特征图尺寸 (例如: 256/16=16, 704/16=44)
@@ -175,12 +178,12 @@ class PETR(nn.Module):
         
         返回:
           xyz_world: (B, N, HW, D, 3) 
-                     B=Batch, N=Cams, HW=FeaturePixels, D=Depths, 3=Coords
+            B=Batch, N=Cams, HW=FeaturePixels, D=Depths, 3=Coords
         """
         B, N = trans.shape[:2]
         Hf, Wf = self.feat_h, self.feat_w
         HW = Hf * Wf
-        D = self.cfg.num_depth
+        D = self.cfg.num_depth # 4
 
         # 1. 构造齐次像素坐标
         # grid_uv: (Hf, Wf, 2)
@@ -200,15 +203,15 @@ class PETR(nn.Module):
         # K_inv: (B, N, 3, 3)
         K_inv = torch.linalg.inv(intrins)
         
-        # 矩阵乘法: (B,N,3,3) @ (B,N,HW,3,1) -> (B,N,HW,3)
+        # 矩阵乘法: (B, N, 3, 3) @ (B, N, HW, 3, 1) -> (B, N, HW, 3)
         # 这里的 unsqueeze 是为了匹配矩阵乘法的维度
         ray = (K_inv.unsqueeze(2) @ uv1.unsqueeze(-1)).squeeze(-1)
 
         # 3. 引入深度信息
         # ray 是单位深度的方向向量。我们需要把它扩展到 D 个深度。
-        # ray: (B,N,HW,3) -> (B,N,HW,1,3)
-        # depth_values: (1,1,1,D,1)
-        # 结果: (B,N,HW,D,3)
+        # ray: (B, N, HW, 3) -> (B, N, HW, 1, 3)
+        # depth_values: (1, 1, 1, D, 1)
+        # 结果: (B, N, HW, D, 3)
         ray_d = ray.unsqueeze(3) * self.depth_values.unsqueeze(-1)
 
         # 4. 相机坐标 -> 世界坐标 (Cam -> Ego/World)
@@ -242,7 +245,8 @@ class PETR(nn.Module):
         xyz_pe = inverse_sigmoid(xyz01)
 
         # 3. 展平深度维度
-        # 我们不希望 Transformer 区分深度维度，而是希望每个像素拥有一个包含所有深度信息的 Embedding
+        # 我们不希望 Transformer 区分深度维度，
+        # 而是希望每个像素拥有一个包含所有深度信息的 Embedding
         # (B, N, HW, D, 3) -> (B, N, HW, 3*D)
         xyz_pe = xyz_pe.permute(0, 1, 2, 4, 3).contiguous().view(B, N, HW, 3 * D)
 
@@ -271,23 +275,24 @@ class PETR(nn.Module):
         # 恢复维度: (B, N, C, Hf, Wf)
         feat = feat.view(B, N, C, Hf, Wf)
         
-        # 展平 spatial dimensions: (B, N, HW, C)
-        # flatten(3) 把 Hf 和 Wf 合并
+        # 展平 spatial dimensions: (B, N, HW, C), flatten(3) 把 Hf 和 Wf 合并
         feat_tok = feat.flatten(3).permute(0, 1, 3, 2).contiguous()
         
         # LayerNorm (Optional but recommended)
         feat_tok = self.feat_ln(feat_tok)
 
         # --- 3. 生成 3D 位置编码 (3D PE) ---
-        # 计算每个像素对应的 3D 坐标
-        xyz_world = self.backproject_to_world(rots, trans, intrins)  # (B,N,HW,D,3)
-        # 将坐标转换为 Embedding
-        pos = self.build_pos_embed(xyz_world)                        # (B,N,HW,C)
+        # 计算每个像素对应的 3D 坐标 -> (B, N, HW, D, 3)
+        xyz_world = self.backproject_to_world(rots, trans, intrins)  
+        
+        # 将坐标转换为 Embedding -> (B, N, HW, C)
+        pos = self.build_pos_embed(xyz_world)                        
 
         # --- 4. 特征融合 (Inject 3D Info) ---
         # PETR 的灵魂: 2D 特征 + 3D 位置编码
         # 现在的 tok 既包含了视觉信息，又包含了 3D 几何信息
-        tok = feat_tok + pos  # (B,N,HW,C)
+        # [B, N, HW, C]
+        tok = feat_tok + pos  
 
         # --- 5. 构建 Transformer Memory (Key/Value) ---
         # 将所有相机的特征拼接到一起，形成一个超长的序列
@@ -301,7 +306,10 @@ class PETR(nn.Module):
 
         # --- 7. Transformer Decoding ---
         # Decoder 内部会进行 Cross-Attention:
-        # Query (tgt) 去查询 Memory (图像特征+3D位置)
+        # Query (tgt) 去查询 Memory (图像特征 + 3D位置)
+        # Q = tgt; K = memory; V = memory;
+        # 自注意力 (Self-Attention): tgt 对 tgt 自己做 Attention
+        # 交叉注意力 (Cross-Attention): tgt 对 memory 做 Attention
         hs = self.decoder(tgt=tgt, memory=memory)  # 输出: (Q, B, C)
         
         # 转回 (B, Q, C) 以便过 Head

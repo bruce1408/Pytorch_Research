@@ -71,6 +71,9 @@ class PETRImpl(nn.Module):
         # 论文结构: Linear -> ReLU -> Linear
         # 输入是 3D 坐标 (x,y,z)，一般会先编码成更高维或者直接映射
         # 这里严格还原论文：3D coords -> PE
+        
+        # 把 3 个坐标值映射到一个高维空间（比如 512 维）。
+        # 这就好比把“经度、纬度、高度”这三个干巴巴的数字，扩展成了一篇 500 字的详细描述
         self.position_encoder = nn.Sequential(
             nn.Linear(3, cfg.embed_dim * 2),
             nn.ReLU(),
@@ -94,12 +97,16 @@ class PETRImpl(nn.Module):
         self.cls_head = nn.Linear(cfg.embed_dim, 10) # 10类
         self.reg_head = nn.Linear(cfg.embed_dim, 10) # x,y,z,w,l,h,sin,cos,vel_x,vel_y
 
-    def create_meshgrid(self, H, W):
+    def create_meshgrid(self, feat_H, feat_W):
         """
+        创建一个网格，包含特征图上所有像素的x和y的坐标;
         生成像素坐标网格 (y, x)
+        feat_H, feat_W 分别表示 特征图的宽和高；
+        这行代码的作用是把这个坐标网格复制扩展，让当前批次（Batch, B）中的每一张图（Camera, N）都拥有一份完全相同的像素坐标网格
         """
-        ys = torch.linspace(0, 1, H)
-        xs = torch.linspace(0, 1, W)
+        ys = torch.linspace(0, 1, feat_H)
+        xs = torch.linspace(0, 1, feat_W)
+        
         # 注意：PETR 这里生成的通常是归一化的像素坐标，或者真实像素坐标
         # 这里我们生成真实像素坐标，后续配合内参使用
         ys = ys * (self.cfg.img_h - 1)
@@ -144,13 +151,15 @@ class PETRImpl(nn.Module):
         # 或者在深度维度上复制几次 (D=4)。
         # 论文中提到: "We discretize the camera frustum..."
         # 实际上，PETR 经常使用 "Depth-adaptive" 的方式，
-        # 简单实现：我们假设 Depth=1，让网络自己学习尺度。
-        # 或者我们模拟 4 个深度的点 (PETR paper settings)
+        # 我们模拟 4 个深度的点 (PETR paper settings)
         
         D = 4 # 深度采样数
         depth_vals = torch.tensor([10.0, 20.0, 30.0, 40.0], device=coords.device).view(1,1,1,D)
         
         # (B, N, HW, 3) -> (B, N, HW, D, 3)
+        # 这代表从相机光心出发，穿过该像素的一条射线 (Ray)。
+        # 但是，这条射线上的点都投影到同一个像素上。此时，我们只知道物体在这个方向上，但不知道物体离我们有多远。
+        # 默认深度：数学上，这一步的结果等价于假设 $Z=1$ (单位深度)
         img_points = img_points.unsqueeze(3) * depth_vals.unsqueeze(-1)
         
         # 4. 相机坐标 -> 世界坐标 (Ego)
@@ -169,7 +178,8 @@ class PETRImpl(nn.Module):
 
     def position_embed(self, coords_3d):
         """
-        [算法核心]: 3D 坐标归一化 + MLP 编码
+        把冰冷的物理坐标数据 (x, y, z)，翻译成神经网络能听懂、能直接和图像特征相加的“位置编码向量” (Position Embedding)
+        [算法核心]: 3D 坐标归一化 + MLP 编码；
         """
         # 1. 归一化 (Normalize 3D coordinates)
         # 将坐标映射到 [0, 1] 之间 (使用 sigmoid 或 min-max)
@@ -185,14 +195,16 @@ class PETRImpl(nn.Module):
         B, N, HW, D, C = coords_3d.shape
         coords_feat = coords_3d.permute(0, 1, 2, 4, 3).contiguous().view(B, N, HW, -1)
         
-        # 简单的归一化技巧
+        # 简单的归一化技巧 [B, N, HW, 3*D] = [1, 6, 704, 12]
         coords_feat = torch.sigmoid(coords_feat) 
         
+                
         # 注意: 此时 coords_feat 维度是 3*D (例如 12)
         # 我们需要先把它映射到 embed_dim
         # 为了对齐上面的 position_encoder 定义 (Linear(3 -> ..))
         # 我们这里做一个简化的适配：假设只取一个深度，或者取平均
-        coords_mean = coords_3d.mean(dim=3) # (B, N, HW, 3)
+        #  (B, N, HW, D, 3) -> (B, N, HW, 3) = [1, 6, 704, 3]
+        coords_mean = coords_3d.mean(dim=3) 
         
         # 归一化
         coords_norm = torch.sigmoid(coords_mean)
@@ -226,11 +238,10 @@ class PETRImpl(nn.Module):
         coords_3d = self.get_3d_coordinates(rots, trans, intrins, inv_intrins)
         
         # 3. Generate 3D Position Embeddings
-        # -> (B, N, HW, 256)
+        # 3D 坐标进行 卷积映射到一个高维空间 -> (B, N, HW, 256)
         pos_embeds = self.position_embed(coords_3d)
         
         # Reshape Image features to (B, N, HW, 256)
-        # 【修复点1】：确保内存连续
         img_feats_flat = img_feats.flatten(3).permute(0, 1, 3, 2).contiguous()
         
         # 4. Add PE to Features (Fusion)
@@ -242,12 +253,12 @@ class PETRImpl(nn.Module):
         # (1) Prepare Key/Value
         # Flatten all cameras: (B, N*HW, C)
         # Permute for Transformer: (Seq_Len, Batch, Dim) -> (N*HW, B, C)
-        # 【修复点2】：使用 reshape 替代 view，或者 flatten
         memory = transformer_input.flatten(1, 2).permute(1, 0, 2)
         
         # (2) Prepare Query
         # (Num_Queries, 1, C) -> (Num_Queries, B, C)
         query_embed = self.object_queries.weight.unsqueeze(1).repeat(1, B, 1)
+        
         # 初始 Query 通常设为 0，位置编码由 query_embed 提供
         target = torch.zeros_like(query_embed)
         
@@ -259,6 +270,7 @@ class PETRImpl(nn.Module):
         # (3) Decoding
         # Out: (Num_Queries, B, C)
         hs = self.decoder(tgt, memory, tgt_key_padding_mask=None)
+        
         # (4) Prediction Head
         hs = hs.permute(1, 0, 2) # (B, Num_Queries, C)
         
