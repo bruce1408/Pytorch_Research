@@ -228,13 +228,17 @@ class StreamPETR(nn.Module):
         # 构造 Decoder 输入 (Target)
         # Content + Position
         tgt = active_queries + query_pe
+       
         # 这里需要 permute 适应 Decoder API (Seq, Batch, Dim)
         tgt = tgt.permute(1, 0, 2) 
         
         # 4. Transformer Decoder
         # Query 带着刚才算好的位置，去图像特征里找东西
-        hs = self.decoder(tgt, memory) # (N_all, B, C) Q = tgt, k = v = memory
-        hs = hs.permute(1, 0, 2) # (B, N_all, C)
+        # (N_all, B, C) Q = tgt, k = v = memory
+        hs = self.decoder(tgt, memory) 
+        
+        # (B, N_all, C)
+        hs = hs.permute(1, 0, 2) 
         
         # 5. Prediction Heads
         # 回归框 (x,y,z,w,l,h...)
