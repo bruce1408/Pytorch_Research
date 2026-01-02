@@ -5,24 +5,32 @@ import math
 
 class DETR3D_Core(nn.Module):
     def __init__(self, num_queries=300, embed_dim=256, num_cameras=6):
+        """
+        num_queries: 查询数量
+        embed_dim: 特征维度
+        num_cameras: 相机数量
+        """
         super().__init__()
+        
         self.num_queries = num_queries
+        
         self.embed_dim = embed_dim
+        
         self.num_cameras = num_cameras
 
         # -----------------------------------------------------------
         # 1. Object Queries (侦探)
         # -----------------------------------------------------------
         # 这是 DETR3D 的起点。这些是可学习的参数，一开始随机初始化。
-        # 它们最终会学会"我想找什么位置的物体"。
+        # 它们最终会学会"我想找什么位置的物体" -> [300, 256]
         self.query_embedding = nn.Embedding(num_queries, embed_dim)
 
         # -----------------------------------------------------------
         # 2. Reference Point Head (侦探猜位置)
         # -----------------------------------------------------------
-        # 一个小的 MLP，负责把 Query 翻译成 3D 坐标 (x, y, z)
+        # 一个小的 MLP，负责把 Query 翻译成 3D 坐标 (x, y, z) -> [300, 3]
         # 输出是 3 维，经过 sigmoid 归一化到 [0, 1] 区间
-        self.reference_point_head = nn.Linear(embed_dim, 3)
+        self.refer_point_head_linear = nn.Linear(embed_dim, 3)
 
         # -----------------------------------------------------------
         # 3. Attention & Refinement (侦探修正)
@@ -40,7 +48,7 @@ class DETR3D_Core(nn.Module):
         [Step 1] 自顶向下：从 Query 猜出 3D 坐标
         """
         # query_embed: (B, Q, C)
-        ref_points = self.reference_point_head(query_embed)
+        ref_points = self.refer_point_head_linear(query_embed)
         
         # 使用 sigmoid 归一化到 [0, 1]，代表在场景空间中的相对位置
         ref_points = ref_points.sigmoid() 
@@ -97,6 +105,7 @@ class DETR3D_Core(nn.Module):
         # grid_sample 要求坐标在 [-1, 1] 之间
         # points_2d 是像素坐标 (u, v)，u在[0, W], v在[0, H]
         points_2d_norm = torch.zeros_like(points_2d)
+        
         points_2d_norm[..., 0] = points_2d[..., 0] / (img_w - 1) * 2 - 1 # x (u)
         points_2d_norm[..., 1] = points_2d[..., 1] / (img_h - 1) * 2 - 1 # y (v)
         
@@ -147,11 +156,11 @@ class DETR3D_Core(nn.Module):
         # 1. 拿到所有的侦探 (Query)
         query_embed = self.query_embedding.weight.unsqueeze(0).expand(B, -1, -1) # (B, Q, C)
         
-        # 2. 侦探先猜一个 3D 位置 (Reference Points)
-        reference_points_3d = self.get_reference_points(query_embed) # (B, Q, 3)
+        # 2. 侦探先猜一个 3D 位置 (Reference Points) -> (B, Q, 3)
+        refer_points_3d = self.get_reference_points(query_embed) 
         
         # 3. 把 3D 位置投影回 2D 图片
-        points_2d, mask = self.project_3d_to_2d(reference_points_3d, lidar2img)
+        points_2d, mask = self.project_3d_to_2d(refer_points_3d, lidar2img)
         
         # 4. 去图片里抓特征 (Sampling)
         # 这就是 Cross-Attention 的核心：Value 是图片特征，Key 是位置
@@ -160,14 +169,18 @@ class DETR3D_Core(nn.Module):
         # 5. Self-Attention (侦探们互相交流)
         # "哎，我找到车头了，你找到车尾了吗？"
         query_embed = query_embed + tgt # 残差连接
-        query_embed = query_embed.transpose(0, 1) # (Q, B, C) required by nn.MultiheadAttention
+        query_embed = query_embed.transpose(0, 1) 
+        
+        # (Q, B, C) required by nn.MultiheadAttention
         query_embed, _ = self.self_attn(query_embed, query_embed, query_embed)
-        query_embed = query_embed.transpose(0, 1) # (B, Q, C)
+        
+        # (B, Q, C) -> (Q, B, C)
+        query_embed = query_embed.transpose(0, 1)
         
         # 6. 最终预测 (Refinement)
         outputs = self.box_head(self.norm1(query_embed))
         
-        return outputs, reference_points_3d
+        return outputs, refer_points_3d
 
 # ==========================================
 # 模拟运行
@@ -175,7 +188,7 @@ class DETR3D_Core(nn.Module):
 if __name__ == "__main__":
     print("DETR3D 核心流程演示...")
     
-    # 参数设置
+    # 参数设置, query_num = 300, embed_dim = 256
     B, N, Q, C = 1, 6, 300, 256
     H, W = 16, 44 # 特征图大小
     
