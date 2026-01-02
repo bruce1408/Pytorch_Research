@@ -91,6 +91,7 @@ class Detr3dCrossAtten(nn.Module):
         # 准备 Grid Sample
         # 将 Batch 和 Camera 维度合并: (B*N, C, H, W)
         feats_flat = image_features.view(B*N, C, H, W)
+        
         # Grid: (B*N, Q, 1, 2)
         grid = points_2d_norm.view(B*N, Q, 1, 2)
         
