@@ -148,7 +148,6 @@ class DETR3D_DecoderLayer(nn.Module):
         # query2 = self.self_attn(query, query, query)[0]
         # query = self.norm1(query + self.dropout1(query2))
         # (为了简化，这里先做 Cross 再做 Self，或者直接使用)
-        
         q2 = self.self_attn(query, query, query)[0]
         query = self.norm1(query + self.dropout1(q2))
         
