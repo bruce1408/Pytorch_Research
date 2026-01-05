@@ -47,14 +47,14 @@ class CaDDN_Core(nn.Module):
 
     def create_voxel_grid(self, grid_size, pc_range):
         """
-        这是一个规则的长方体（比如自车前方 80米，左右 40米）。 这个 grid 存储的不是特征，而是“地址”
-        因为网格是固定的，不需要 Batch 维度（这只是坐标值）。
-        生成目标 3D Voxel 的物理坐标。
-        输出 shape: (1, 3, Z, Y, X) -> 3 代表 (x, y, z)
-        我理解这个体素网格就是，xyz 表示 体素网格的坐标，在 这个坐标里面，
-        存储的是 当前格子的中心，距离我车的中心的距离，比如车头前方 10.5米，车左侧-3.2米，车上方的0.5米
-        grid[0, 0, 0, 0] 可能存着 [0.0, -10.0, -1.0]
-        车头原点，左边10米，地下1米
+            这是一个规则的长方体（比如自车前方 80米，左右 40米）。 这个 grid 存储的不是特征，而是“地址”
+            因为网格是固定的，不需要 Batch 维度（这只是坐标值）。
+            生成目标 3D Voxel 的物理坐标。
+            输出 shape: (1, 3, Z, Y, X) -> 3 代表 (x, y, z)
+            我理解这个体素网格就是，xyz 表示 体素网格的坐标，在 这个坐标里面，
+            存储的是 当前格子的中心，距离我车的中心的距离，比如车头前方 10.5米，车左侧-3.2米，车上方的0.5米
+            grid[0, 0, 0, 0] 可能存着 [0.0, -10.0, -1.0]
+            车头原点，左边10米，地下1米
         """
         X_n, Y_n, Z_n = grid_size
         x_min, y_min, z_min, x_max, y_max, z_max = pc_range
@@ -74,14 +74,14 @@ class CaDDN_Core(nn.Module):
 
     def frustum_to_voxel_sampling(self, frustum_feat, grid, calib_mats):
         """
-        frustum_feat 上下文*深度 = 特征
-        grid 体素空间的网格
-        calib_mats = 相机参数矩阵
-        [核心步骤 2] 视锥 -> 体素变换
-        原理: 逆向采样。
-        1. 拿到 Voxel 的 (x,y,z) 物理坐标。
-        2. 投影回相机平面 -> 得到 (u, v) 和 深度 d。
-        3. 用 (u, v, d) 去 Frustum Feature 里采样。
+            frustum_feat 上下文*深度 = 特征
+            grid 体素空间的网格
+            calib_mats = 相机参数矩阵
+            [核心步骤 2] 视锥 -> 体素变换
+            原理: 逆向采样。
+            1. 拿到 Voxel 的 (x,y,z) 物理坐标。
+            2. 投影回相机平面 -> 得到 (u, v) 和 深度 d。
+            3. 用 (u, v, d) 去 Frustum Feature 里采样。
         """
         B = frustum_feat.shape[0] # [2, 64, 80, 96, 320]
         device = frustum_feat.device
