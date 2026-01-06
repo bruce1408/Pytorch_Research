@@ -21,31 +21,125 @@ class LSS_Core(nn.Module):
         
 
     def create_frustum(self):
+        """
+            self.frustum 枚举了所有像素位置 (u,v) 与深度 bin k（通过 depth_k 表示）的组合；
+            对 self.frustum 做 inv(K) 反投影并再用外参变换到 ego 坐标系，
+            就得到了这些 (u,v,k) 对应的自车坐标系 3D 点
+            所以这里的视锥就是 u,v,k 像素坐标下的视锥点，后面进行 3D 转换用的
+        """
         ds = torch.arange(*self.data_conf['dbound'], dtype=torch.float).view(-1, 1, 1)
+        
         D, _, _ = ds.shape
+        
         H, W = self.data_conf['img_size']
+        
         xs = torch.linspace(0, W - 1, W, dtype=torch.float).view(1, 1, W).expand(D, H, W)
         ys = torch.linspace(0, H - 1, H, dtype=torch.float).view(1, H, 1).expand(D, H, W)
+        
         frustum = torch.stack((xs, ys, ds.expand(D, H, W)), -1)
+        
         return nn.Parameter(frustum, requires_grad=False)
 
 
     def get_geometry(self, rots, trans, intrinsics):
+        """
         
-        # 强制生成有效范围内的点，保证训练稳定
-        B, N, _ = trans.shape
+        ### [UVK->XYZ 核心：LSS 正确几何映射]
+
+        输入：
+        rots: (B, N, 3, 3)  camera->ego 的旋转（假设）
+        trans: (B, N, 3)    camera->ego 的平移（假设）
+        intrinsics: (B, N, 3, 3) 相机内参 K（针对 feature 尺度时需要相应缩放后的K）
+
+    
+        [真实实现] 几何投影 (Geometry Projection)
+        这个函数，通过对视锥frustum 存的 [u,v,d] 是 “图像参数 + 深度”（不是 xyz);
+        然后通过投影，计算在自车坐标系下的3D点xyz
         
-        x_min, x_max = self.grid_conf['xbound'][0], self.grid_conf['xbound'][1]
-        y_min, y_max = self.grid_conf['ybound'][0], self.grid_conf['ybound'][1]
-        z_min, z_max = self.grid_conf['zbound'][0], self.grid_conf['zbound'][1]
+        输入:
+            rots:       (B, N, 3, 3) 相机到车身的旋转矩阵
+            trans:      (B, N, 3)    相机到车身的平移向量
+            intrinsics: (B, N, 3, 3) 相机内参矩阵
+            N 表示有 N 个视角的摄像头sensor
+            
+        输出:
+            coords_ego: (B, N, D, H, W, 3)  ego坐标系下每个 (u,v,depth) 的 3D 点
+            coords_xyz: (B, N, D, H, W, 3) 车身坐标系下的点云
+            对每个 batch b、相机 n、深度 bin d、像素格点 (h,w)，
+            都有一个 ego 坐标系下的 3D 点 xyz = points_ego[b,n,d,h,w]
+        """
+        # 1. 维度准备
+        B, N, _ = trans.shape # N 表示 6个视角的摄像头sensor
+        D, H, W, _ = self.frustum.shape
         
-        # [1, 6, 41, 16, 44, 3]
-        rand_vals = torch.rand(B, N, self.D, *self.data_conf['img_size'], 3, device=trans.device)
-        coords_xyz = torch.zeros_like(rand_vals)
-        coords_xyz[..., 0] = rand_vals[..., 0] * (x_max - x_min - 2.0) + x_min + 1.0
-        coords_xyz[..., 1] = rand_vals[..., 1] * (y_max - y_min - 2.0) + y_min + 1.0
-        coords_xyz[..., 2] = rand_vals[..., 2] * (z_max - z_min - 0.2) + z_min + 0.1
-        return coords_xyz
+        # 将 frustum 扩展到 Batch 和 Camera 维度，并移动到正确的设备(GPU), 相机坐标系的参数化
+        # frustum shape: (D, H, W, 3) -> (B, N, D, H, W, 3)
+        # 内容: points[..., 0]是u, [..., 1]是v, [..., 2]是d
+        points = self.frustum.to(trans.device).unsqueeze(0).unsqueeze(0).expand(B, N, D, H, W, 3)
+
+        # 2. 提取像素坐标和深度
+        # 深度 d: (B, N, D, H, W)
+        depth = points[..., 2] 
+        
+        # 构造齐次像素坐标 [u, v, 1]
+        # shape: (B, N, D, H, W, 3)
+        points_uv1 = torch.stack([
+            points[..., 0], 
+            points[..., 1], 
+            torch.ones_like(depth)
+        ], dim=-1)
+
+        # 3. 展平空间维度以进行批量矩阵乘法
+        # 为了高效计算，我们将 D, H, W 展平为 NumPoints
+        NumPoints = D * H * W
+        
+        # (B, N, D, H, W, 3) -> (B, N, NumPoints, 3) -> (B, N, 3, NumPoints)
+        # 这里转置是为了符合矩阵乘法 (3x3) @ (3xN) 的格式
+        points_uv1_flat = points_uv1.view(B, N, NumPoints, 3).permute(0, 1, 3, 2)
+        
+        # 深度也展平: (B, N, 1, NumPoints) 用于广播乘法
+        depth_flat = depth.view(B, N, 1, NumPoints)
+
+        # =================================================
+        # 阶段 1: 像素坐标 -> 相机坐标 (Unprojection)
+        # 公式: P_cam = d * K_inv * P_pix
+        # =================================================
+        
+        # 计算内参的逆矩阵: (B, N, 3, 3)
+        intrinsics_inv = torch.inverse(intrinsics)
+        
+        # 矩阵乘法: K_inv @ P_uv1
+        # (B, N, 3, 3) @ (B, N, 3, NumPoints) -> (B, N, 3, NumPoints)
+        points_cam = torch.matmul(intrinsics_inv, points_uv1_flat)
+        
+        # 乘以深度可以转换为 --> 相机坐标系 (B, N, 3, NumPoints)
+        # 相机坐标系 (camera frame) 下的 3D 点云（但还是平铺形状）
+        points_cam = points_cam * depth_flat
+
+
+        # =================================================
+        # 阶段 2: 相机坐标 -> 车身坐标 (Extrinsic)
+        # 公式: P_ego = Rot * P_cam + Trans
+        # =================================================
+        
+        # 旋转: Rot @ P_cam
+        # (B, N, 3, 3) @ (B, N, 3, NumPoints) -> (B, N, 3, NumPoints)
+        points_ego = torch.matmul(rots, points_cam)
+        
+        # 平移: + Trans, 这里得到的是转化为 --> 自车坐标系
+        # trans: (B, N, 3) -> (B, N, 3, 1) 以便广播相加
+        points_ego = points_ego + trans.view(B, N, 3, 1)
+
+        # 4. 恢复形状
+        # (B, N, 3, NumPoints) -> (B, N, 3, D, H, W)
+        points_ego = points_ego.view(B, N, 3, D, H, W)
+        
+        # 调整最后维度的顺序: (B, N, D, H, W, 3)
+        # 最后的 3 代表 (x, y, z)
+        points_ego = points_ego.permute(0, 1, 3, 4, 5, 2)
+
+        return points_ego
+    
 
     def get_cam_feats(self, x):
         B, N, C, H, W = x.shape
@@ -84,9 +178,11 @@ class LSS_Core(nn.Module):
         x, y, z = x[ranks], y[ranks], z[ranks]
         geom_feats = geom_feats[ranks]
         indices = indices[ranks]
+        
         # 173184
         keep = torch.ones_like(indices, dtype=torch.bool)
         keep[:-1] = (indices[1:] != indices[:-1])
+        
         # [173184, 64]
         cumsum = torch.cumsum(geom_feats, 0)
         cumsum = cumsum[keep]
@@ -103,8 +199,11 @@ class LSS_Core(nn.Module):
         
         B, N, C, H, W = x.shape
         
+        # frustum 特征虽然按 (u,v,k) 存在张量里，但它代表的是空间点的特征；把 (u,v,k) 通过几何映射到 ego 后
+        # 你用的是 ego→BEV 的 cell 索引 来重排/分组这些特征，然后在同一 cell 内求和，所以完全合理。
         cam_feats = self.get_cam_feats(x)
         
+        # B, N, D, C, H, W
         cam_feats = cam_feats.view(B, N, self.D, self.C, H, W).permute(0, 1, 2, 4, 5, 3) 
         
         geom_xyz = self.get_geometry(rots, trans, intrinsics)
