@@ -103,7 +103,8 @@ class LSS_Core(nn.Module):
     def get_geometry(self, rots, trans, intrinsics):
         """
         [真实实现] 几何投影 (Geometry Projection)
-        这个函数，通过对视锥frustum 存的 [u,v,d] 是 “图像参数 + 深度”（不是 xyz);然后通过投影，计算在自车坐标系下的3D点xyz
+        这个函数，通过对视锥frustum 存的 [u,v,d] 是 “图像参数 + 深度”（不是 xyz);
+        然后通过投影，计算在自车坐标系下的3D点xyz
         
         输入:
             rots:       (B, N, 3, 3) 相机到车身的旋转矩阵

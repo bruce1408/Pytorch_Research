@@ -481,7 +481,7 @@ class FrustumToVoxel(nn.Module):
         
         # 转换为齐次坐标（添加1）：(B,4,N)
         # 齐次坐标方便进行矩阵变换
-        ones = torch.ones((B,1,vox_flat.shape[-1]), device=device)
+        ones = torch.ones((B, 1, vox_flat.shape[-1]), device=device)
         vox_h = torch.cat([vox_flat, ones], dim=1)
 
         # 投影到图像空间：ego坐标 -> 图像坐标
@@ -815,11 +815,13 @@ class CaDDN_Paper(nn.Module):
 
         # BEV特征压缩和骨干网络
         Zn = voxel_grid_size[2]  # Z方向大小
+        
         self.bev_compressor = nn.Sequential(
             nn.Conv2d(sem_channels*Zn, bev_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(bev_channels),
             nn.ReLU(inplace=True)
         )
+        
         self.bev_backbone = BEVBackbone(bev_channels, bev_channels)
 
         # 锚点生成器和检测头
@@ -1351,6 +1353,7 @@ def main():
         {"name": "Ped",     "w": 0.6, "l": 0.8,  "h": 1.73, "z": -0.9},
         {"name": "Cyclist", "w": 0.6, "l": 1.76, "h": 1.73, "z": -0.9},
     ]
+    
     rotations = (0.0, math.pi / 2)  # 0度和90度
 
     # =========================================================

@@ -31,8 +31,10 @@ class LSS_Core(nn.Module):
 
 
     def get_geometry(self, rots, trans, intrinsics):
+        
         # 强制生成有效范围内的点，保证训练稳定
         B, N, _ = trans.shape
+        
         x_min, x_max = self.grid_conf['xbound'][0], self.grid_conf['xbound'][1]
         y_min, y_max = self.grid_conf['ybound'][0], self.grid_conf['ybound'][1]
         z_min, z_max = self.grid_conf['zbound'][0], self.grid_conf['zbound'][1]
@@ -58,9 +60,13 @@ class LSS_Core(nn.Module):
         return cam_feats
 
     def voxel_pooling(self, geom_feats, x, y, z):
+        
         B, N, D, H, W, C = geom_feats.shape  # [1, 6, 41, 16, 44, 64]
+        
         Nprime = B * N * D * H * W # 173184
+        
         geom_feats = geom_feats.contiguous().view(Nprime, C)
+        
         x = x.reshape(Nprime)
         y = y.reshape(Nprime)
         z = z.reshape(Nprime)
@@ -94,14 +100,21 @@ class LSS_Core(nn.Module):
         return final_bev.permute(0, 3, 1, 2) 
 
     def forward(self, x, rots, trans, intrinsics):
+        
         B, N, C, H, W = x.shape
+        
         cam_feats = self.get_cam_feats(x)
+        
         cam_feats = cam_feats.view(B, N, self.D, self.C, H, W).permute(0, 1, 2, 4, 5, 3) 
+        
         geom_xyz = self.get_geometry(rots, trans, intrinsics)
+        
         x_idx = ((geom_xyz[..., 0] - self.grid_conf['xbound'][0]) / self.grid_conf['xbound'][2]).floor().long()
         y_idx = ((geom_xyz[..., 1] - self.grid_conf['ybound'][0]) / self.grid_conf['ybound'][2]).floor().long()
         z_idx = ((geom_xyz[..., 2] - self.grid_conf['zbound'][0]) / self.grid_conf['zbound'][2]).floor().long()
+        
         bev_feature = self.voxel_pooling(cam_feats, x_idx, y_idx, z_idx)
+        
         return bev_feature
 
 # ==========================================
@@ -186,6 +199,7 @@ def main():
         'xbound': [-50.0, 50.0, 0.5], 'ybound': [-50.0, 50.0, 0.5],
         'zbound': [-10.0, 10.0, 20.0], 'dbound': [4.0, 45.0, 1.0],
     }
+    
     data_conf = {'img_size': (16, 44), 'dbound': grid_conf['dbound'], 'D': 41}
     
     # --- 初始化模型 ---
