@@ -75,6 +75,7 @@ class LSS_Core(nn.Module):
         # 将 frustum 扩展到 Batch 和 Camera 维度，并移动到正确的设备(GPU), 相机坐标系的参数化
         # frustum shape: (D, H, W, 3) -> (B, N, D, H, W, 3)
         # 内容: points[..., 0]是u, [..., 1]是v, [..., 2]是d
+        # 这里的视锥就是 u,v,k_depth  -> 3D 自车坐标系
         points = self.frustum.to(trans.device).unsqueeze(0).unsqueeze(0).expand(B, N, D, H, W, 3)
 
         # 2. 提取像素坐标和深度
@@ -199,15 +200,20 @@ class LSS_Core(nn.Module):
         
         B, N, C, H, W = x.shape
         
-        # frustum 特征虽然按 (u,v,k) 存在张量里，但它代表的是空间点的特征；把 (u,v,k) 通过几何映射到 ego 后
-        # 你用的是 ego→BEV 的 cell 索引 来重排/分组这些特征，然后在同一 cell 内求和，所以完全合理。
+        # frustum 特征虽然按 (u,v,k) 存在张量里，但它代表的是空间点的特征；
+        # 把 (u,v,k) 通过几何映射到 ego 后
+        # 你用的是 ego→BEV 的 cell 索引 来重排/分组这些特征
+        # 然后在同一 cell 内求和，所以完全合理。
         cam_feats = self.get_cam_feats(x)
         
         # B, N, D, C, H, W
         cam_feats = cam_feats.view(B, N, self.D, self.C, H, W).permute(0, 1, 2, 4, 5, 3) 
         
+        # 这个是自车坐标系下的3D网格 [x, y, z]
         geom_xyz = self.get_geometry(rots, trans, intrinsics)
         
+        
+        # 这里把bev 3D 坐标变成 网格，格子数
         x_idx = ((geom_xyz[..., 0] - self.grid_conf['xbound'][0]) / self.grid_conf['xbound'][2]).floor().long()
         y_idx = ((geom_xyz[..., 1] - self.grid_conf['ybound'][0]) / self.grid_conf['ybound'][2]).floor().long()
         z_idx = ((geom_xyz[..., 2] - self.grid_conf['zbound'][0]) / self.grid_conf['zbound'][2]).floor().long()

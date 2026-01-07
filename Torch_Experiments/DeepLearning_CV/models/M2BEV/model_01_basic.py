@@ -8,31 +8,28 @@ import math
 # 对应论文 Experiment 部分的设置 (nuScenes)
 # ==============================================================================
 class M2BEVConfig:
-    # 3D 空间范围 (X_min, Y_min, Z_min, X_max, Y_max, Z_max)
-    # 论文 Sec 3.1: Range ±50m, Z: -1~5m
     pc_range = [-50.0, -50.0, -1.0, 50.0, 50.0, 5.0]
-    
-    # Voxel 大小
-    # 论文 Sec 3.1: (0.25m, 0.25m, 0.5m)
     voxel_size = [0.25, 0.25, 0.5]
-    
-    # 计算 Grid 尺寸: 100m / 0.25m = 400
-    # X, Y, Z = (400, 400, 12)
     grid_size = [
         int((pc_range[3] - pc_range[0]) / voxel_size[0]),
         int((pc_range[4] - pc_range[1]) / voxel_size[1]),
         int((pc_range[5] - pc_range[2]) / voxel_size[2])
     ]
-    
-    # 输入图像参数 (假设)
+
     num_cams = 6
-    img_size = (900, 1600) # H, W
-    
-    # 特征维度
-    feat_dim = 64        # 2D 特征维度 (C)
-    bev_dim = 128        # BEV 特征维度
-    num_classes_det = 10 # 检测类别数
-    num_classes_seg = 2  # 分割类别数 (Drivable area, Lane)
+    img_size = (900, 1600)  # H, W
+
+    feat_dim = 64
+    bev_dim = 128
+    num_classes_det = 10
+    num_classes_seg = 2
+
+    # 新增：特征图 stride（你的 encoder 是 /4）
+    feat_stride = 4
+
+    # 新增：多视角融合方式：'mean'/'sum'/'max'
+    view_fusion = "mean"
+
 
 cfg = M2BEVConfig()
 
@@ -70,127 +67,158 @@ class SimpleImageEncoder(nn.Module):
 # ==============================================================================
 class UniformViewTransformer(nn.Module):
     """
-    论文核心贡献 Sec 3.2: Efficient 2D->3D Projection
-    与 LSS 不同，M2BEV 不预测深度分布，而是假设射线上的深度是均匀的 (Uniform)。
-    这意味着：投影到同一像素的所有 Voxels 共享相同的图像特征。
+    M2BEV: Uniform 2D->3D Projection (voxel-centric pull)
+    关键修复：
+    - u,v 是像素坐标，要先 /stride -> 特征图坐标，再用 Hf/Wf 归一化
+    - 加图像边界 mask
+    - chunk grid_sample 防爆显存
+    - 多视角融合 mean/sum/max
     """
-    def __init__(self, config):
+    def __init__(self, config, chunk_size=200_000):
         super().__init__()
+        
         self.grid_size = config.grid_size
         self.pc_range = config.pc_range
         self.voxel_size = config.voxel_size
-        
-        # 预先生成 Voxel 的物理坐标 (X, Y, Z)
-        # Shape: (1, 3, Z, Y, X)
+        self.num_cams = config.num_cams
+        self.stride = config.feat_stride
+        self.view_fusion = getattr(config, "view_fusion", "mean")
+        self.chunk_size = int(chunk_size)
+
         self.register_buffer('voxel_coords', self._create_voxel_grid())
 
+        # 原图尺寸，用于像素边界判断
+        self.img_H, self.img_W = config.img_size
+
     def _create_voxel_grid(self):
-        # 生成网格中心坐标
         coords_x = torch.linspace(
-            self.pc_range[0] + self.voxel_size[0]/2, 
-            self.pc_range[3] - self.voxel_size[0]/2, 
+            self.pc_range[0] + self.voxel_size[0] / 2,
+            self.pc_range[3] - self.voxel_size[0] / 2,
             self.grid_size[0]
         )
+        
         coords_y = torch.linspace(
-            self.pc_range[1] + self.voxel_size[1]/2, 
-            self.pc_range[4] - self.voxel_size[1]/2, 
+            self.pc_range[1] + self.voxel_size[1] / 2,
+            self.pc_range[4] - self.voxel_size[1] / 2,
             self.grid_size[1]
         )
+        
         coords_z = torch.linspace(
-            self.pc_range[2] + self.voxel_size[2]/2, 
-            self.pc_range[5] - self.voxel_size[2]/2, 
+            self.pc_range[2] + self.voxel_size[2] / 2,
+            self.pc_range[5] - self.voxel_size[2] / 2,
             self.grid_size[2]
         )
-        
-        # Note: indexing 'ij' gives (Z, Y, X) order for meshgrid
+
         coords_z, coords_y, coords_x = torch.meshgrid(coords_z, coords_y, coords_x, indexing='ij')
-        
-        # Stack to (3, Z, Y, X) -> (x, y, z)
-        grid = torch.stack([coords_x, coords_y, coords_z], dim=0)
-        return grid.unsqueeze(0) # (1, 3, Z, Y, X)
+        grid = torch.stack([coords_x, coords_y, coords_z], dim=0)  # (3, Z, Y, X)
+        return grid.unsqueeze(0)  # (1, 3, Z, Y, X)
 
     def forward(self, img_feats, mats_dict):
         """
-        Args:
-            img_feats: (B*N, C, H_f, W_f) 图像特征
-            mats_dict: 包含内参 intrinsic 和外参 extrinsic
-                - ego2cam: (B*N, 4, 4) 世界/自车坐标系到相机坐标系
-                - cam2img: (B*N, 4, 4) 相机到像素坐标系 (内参)
-        Returns:
-            voxel_feat: (B, C, Z, Y, X) 填充后的 3D 体素特征
+        img_feats: (B*N, C, Hf, Wf)
+        mats_dict:
+          - ego2cam: (B*N,4,4)
+          - cam2img: (B*N,4,4)  (像素坐标系投影)
+        return:
+          voxel_feat: (B, C, Z, Y, X)
         """
         B_N, C, Hf, Wf = img_feats.shape
-        # 假设 B=1, N=6 -> B_N=6
-        
-        # 1. 准备 Voxel 坐标
-        # (1, 3, Z, Y, X) -> (B*N, 3, Z*Y*X)
-        voxel_coords = self.voxel_coords.repeat(B_N, 1, 1, 1, 1)
+        device = img_feats.device
+
+        # -------- 1) voxel coords flatten --------
+        voxel_coords = self.voxel_coords.to(device).repeat(B_N, 1, 1, 1, 1)  # (B*N,3,Z,Y,X)
         _, _, Z, Y, X = voxel_coords.shape
-        voxel_points = voxel_coords.view(B_N, 3, -1)
+        N_pts = Z * Y * X
+
+        pts = voxel_coords.view(B_N, 3, -1)  # (B*N,3,N)
+        ones = torch.ones((B_N, 1, N_pts), device=device)
         
-        # 转为齐次坐标 (B*N, 4, N_points)
-        ones = torch.ones((B_N, 1, voxel_points.shape[-1]), device=img_feats.device)
-        voxel_points = torch.cat([voxel_points, ones], dim=1)
+        pts_h = torch.cat([pts, ones], dim=1)  # (B*N,4,N)
+
+        # -------- 2) projection ego->img (pixel) --------
+        proj_mat = torch.bmm(mats_dict['cam2img'], mats_dict['ego2cam'])  # (B*N,4,4)
         
-        # 2. 逆向投影 (Voxel -> Image)
-        # P_img = K * T * P_world
-        # 组合变换矩阵: (B*N, 4, 4)
-        # 注意：这里简化处理，假设 mats_dict 已经包含了从 ego 到 image 的完整变换
-        # 实际代码可能需要 ego2lidar @ lidar2cam @ intrinsic
-        proj_mat = torch.bmm(mats_dict['cam2img'], mats_dict['ego2cam']) 
+        # 自车坐标系投影到像素坐标系下 u,v,d
+        img_pts = torch.bmm(proj_mat, pts_h)  # (B*N,4,N)
+
+        depth = img_pts[:, 2:3, :]  # (B*N,1,N)
+        eps = 1e-6
+        u = img_pts[:, 0:1, :] / (depth + eps)  # pixel x
+        v = img_pts[:, 1:2, :] / (depth + eps)  # pixel y
+
+        # -------- 3) valid mask：前方 + 图像边界 --------
+        valid = (depth > 0.1) & (u >= 0) & (u <= (self.img_W - 1)) & (v >= 0) & (v <= (self.img_H - 1))
+        valid = valid.view(B_N, 1, N_pts)
+
+        # -------- 4) pixel -> feature coords (IMPORTANT FIX) --------
+        uf = u / float(self.stride)
+        vf = v / float(self.stride)
+
+        # 防止除零（Wf/Hf 可能为1的极端情况）
+        Wf_denom = max(Wf - 1, 1)
+        Hf_denom = max(Hf - 1, 1)
+
+        # -------- 5) normalize to [-1,1] for grid_sample (feature coords!) --------
+        u_norm_all = 2.0 * (uf / Wf_denom) - 1.0
+        v_norm_all = 2.0 * (vf / Hf_denom) - 1.0
+
+        # 无效点推到范围外（grid_sample 会输出 0）
+        oob = torch.full_like(u_norm_all, 2.0)
+        u_norm_all = torch.where(valid, u_norm_all, oob)
+        v_norm_all = torch.where(valid, v_norm_all, oob)
+
+        # -------- 6) chunked grid_sample --------
+        sampled_feat = torch.zeros((B_N, C, N_pts), device=device, dtype=img_feats.dtype)
         
-        img_points = torch.bmm(proj_mat, voxel_points) # (B*N, 4, N_points)
-        
-        # 3. 归一化坐标 & 深度过滤
-        eps = 1e-5
-        depth = img_points[:, 2:3, :]
-        u = img_points[:, 0:1, :] / (depth + eps)
-        v = img_points[:, 1:2, :] / (depth + eps)
-        
-        # 归一化到 [-1, 1] 用于 grid_sample
-        # 注意：这里的 Hf, Wf 是特征图尺寸，需要根据下采样倍率调整
-        # M2BEV 论文中 feature map 是 input 的 1/4
-        u_norm = (u / (Wf - 1) * 2) - 1
-        v_norm = (v / (Hf - 1) * 2) - 1
-        
-        # 4. 生成采样 Grid
-        # (B*N, N_points, 2)
-        sample_grid = torch.cat([u_norm, v_norm], dim=1).permute(0, 2, 1)
-        sample_grid = sample_grid.view(B_N, Z * Y * X, 1, 2) # grid_sample 需要 4D/5D 输入
-        
-        # 5. 采样图像特征 (Grid Sample)
-        # Input: (B*N, C, Hf, Wf)
-        # Grid:  (B*N, Z*Y*X, 1, 2)
-        sampled_feat = F.grid_sample(
-            img_feats, 
-            sample_grid, 
-            align_corners=True, 
-            padding_mode='zeros' # 投影到图像外的 Voxel 填充 0
-        ) 
-        # Output: (B*N, C, Z*Y*X, 1) -> (B*N, C, Z*Y*X)
-        sampled_feat = sampled_feat.view(B_N, C, -1)
-        
-        # 6. 处理深度有效性
-        # 只保留相机前方的点 (depth > 0)
-        valid_mask = (depth > 0.1).view(B_N, 1, -1)
-        sampled_feat = sampled_feat * valid_mask
-        
-        # 7. 多视角融合 (Multi-View Aggregation)
-        # 论文 Sec 3.1: "The voxel feature contains image features with all the views"
-        # 这里使用简单的 Mean Pooling 或 Max Pooling 将 6 个视角的特征融合到一个 Voxel
-        # Reshape to (B, N, C, N_voxels) -> Sum/Mean over N
-        B = B_N // 6 # 假设 N=6
-        sampled_feat = sampled_feat.view(B, 6, C, -1)
-        valid_mask = valid_mask.view(B, 6, 1, -1)
-        
-        # 加权平均 (避免除以0)
-        fused_feat = torch.sum(sampled_feat, dim=1) / (torch.sum(valid_mask, dim=1) + 1e-6)
-        
-        # 8. 恢复 Voxel 形状
-        # (B, C, Z, Y, X)
-        voxel_feat = fused_feat.view(B, C, Z, Y, X)
-        
+        # 这里没有关于深度的部分，完全是通过u和v来采样
+        for s in range(0, N_pts, self.chunk_size):
+            e = min(s + self.chunk_size, N_pts)
+
+            u_norm = u_norm_all[:, :, s:e]  # (B*N,1,chunk)
+            v_norm = v_norm_all[:, :, s:e]  # (B*N,1,chunk)
+
+            # grid: (B*N, chunk, 1, 2)  last dim is (x,y)
+            grid = torch.cat([u_norm, v_norm], dim=1).permute(0, 2, 1)  # (B*N,chunk,2)
+            grid = grid.view(B_N, e - s, 1, 2)
+
+            # output: (B*N, C, chunk, 1) -> (B*N, C, chunk)
+            out = F.grid_sample(
+                img_feats,
+                grid,
+                align_corners=True,
+                padding_mode='zeros',
+                mode='bilinear'
+            ).squeeze(-1)
+
+            sampled_feat[:, :, s:e] = out
+
+        # -------- 7) multi-view fusion to B --------
+        B = B_N // self.num_cams
+        sampled_feat = sampled_feat.view(B, self.num_cams, C, N_pts)   # (B,N,C,Npts)
+        valid_mask = valid.view(B, self.num_cams, 1, N_pts).to(sampled_feat.dtype)
+
+        if self.view_fusion == "sum":
+            fused = sampled_feat.sum(dim=1)  # (B,C,Npts)
+
+        elif self.view_fusion == "max":
+            
+            # 无效位置置为很小值，避免 max 被 0 干扰
+            neg_inf = torch.finfo(sampled_feat.dtype).min
+            masked = torch.where(valid_mask > 0, sampled_feat, torch.tensor(neg_inf, device=device, dtype=sampled_feat.dtype))
+            fused = masked.max(dim=1).values
+            
+            # 如果所有视角都无效，max 会是 -inf，改回 0
+            all_invalid = (valid_mask.sum(dim=1) == 0)
+            fused = torch.where(all_invalid.expand_as(fused), torch.zeros_like(fused), fused)
+
+        else:  # mean (default)
+            denom = valid_mask.sum(dim=1).clamp(min=1.0)  # (B,1,Npts)
+            fused = sampled_feat.sum(dim=1) / denom
+
+        # -------- 8) reshape to voxel volume --------
+        voxel_feat = fused.view(B, C, Z, Y, X)
         return voxel_feat
+
 
 # ==============================================================================
 # 4. Efficient BEV Encoder (S2C + Conv)
@@ -318,30 +346,29 @@ class SegmentationHead(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-def compute_bev_centerness(bev_dims):
+def compute_bev_centerness(bev_dims, device=None, dtype=torch.float32):
     """
-    论文 Sec 3.3 Formula (2): BEV Centerness
-    用于 Segmentation Loss 的加权。
-    思想：远处的物体像素少，需要更大的权重。
-    Centerness = 1 + sqrt( (dist_to_center) / (max_dist) )
-    Range: [1, 2]
+    centerness = 1 + sqrt(dist^2 / max_dist^2)  ∈ [1,2]
     """
     H, W = bev_dims
-    
-    # 生成坐标网格
-    ys, xs = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij')
-    
-    # 中心点
-    yc, xc = H / 2.0, W / 2.0
-    
-    # 计算距离平方
-    dist_sq = (xs - xc)**2 + (ys - yc)**2
-    max_dist_sq = (max(xs.flatten()) - xc)**2 + (max(ys.flatten()) - yc)**2
-    
-    # 公式实现
-    centerness = 1.0 + torch.sqrt(dist_sq / max_dist_sq)
-    
-    return centerness # (H, W)
+    ys, xs = torch.meshgrid(
+        torch.arange(H, device=device, dtype=dtype),
+        torch.arange(W, device=device, dtype=dtype),
+        indexing='ij'
+    )
+
+    yc, xc = (H - 1) / 2.0, (W - 1) / 2.0
+    dist_sq = (xs - xc) ** 2 + (ys - yc) ** 2
+
+    #  角点最大距离（更明确）
+    corners = torch.tensor(
+        [[0.0, 0.0], [0.0, W - 1.0], [H - 1.0, 0.0], [H - 1.0, W - 1.0]],
+        device=device, dtype=dtype
+    )
+    max_dist_sq = ((corners[:, 1] - xc) ** 2 + (corners[:, 0] - yc) ** 2).max()
+
+    centerness = 1.0 + torch.sqrt(dist_sq / (max_dist_sq + 1e-6))
+    return centerness  # (H, W)
 
 # ==============================================================================
 # 7. M2BEV 整体网络 (Main Model)
@@ -377,10 +404,10 @@ class M2BEV(nn.Module):
         )
         
         # Pre-compute Centerness map for loss (buffer)
-        self.register_buffer(
-            'centerness_map', 
-            compute_bev_centerness((config.grid_size[1], config.grid_size[0]))
-        )
+        H_bev, W_bev = config.grid_size[1], config.grid_size[0]
+        cent = compute_bev_centerness((H_bev, W_bev), device=torch.device("cpu"))
+        self.register_buffer('centerness_map', cent)
+    
 
     def forward(self, imgs, mats_dict):
         """

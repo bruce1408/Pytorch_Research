@@ -469,11 +469,12 @@ class FrustumToVoxel(nn.Module):
         返回:
             voxel_feat: (B,C,Z,Y,X) 体素特征
         """
+        
         B, C, D, Hf, Wf = frustum_feat.shape
         device = frustum_feat.device
         
         # 扩展体素网格到batch大小
-        vox = voxel_grid.to(device).repeat(B, 1, 1, 1, 1)  # (B,3,Z,Y,X)
+        vox = voxel_grid.to(device).repeat(B, 1, 1, 1, 1)  # (B, 3, Z, Y, X)
         _, _, Z, Y, X = vox.shape
         
         # 将体素坐标展平: (B,3,N) 其中N=Z*Y*X
@@ -861,7 +862,7 @@ class CaDDN_Paper(nn.Module):
         # 1. 图像特征提取
         feat = self.backbone(images)  # (B, C, Hf, Wf)
         
-        # 2. 双头预测：语义特征 + 深度分布
+        # 2. 双头预测：语义特征 + 深度分布，深度在CaDDN这里有真值可以做有监督学习
         sem, depth_logits = self.dual_heads(feat)
         # sem: (B, sem_channels, Hf, Wf)
         # depth_logits: (B, depth_bins, Hf, Wf)
@@ -877,7 +878,7 @@ class CaDDN_Paper(nn.Module):
         # depth_prob.unsqueeze(1): (B, 1, D, Hf, Wf)
         # 结果: (B, C, D, Hf, Wf)
 
-        # 5. 视锥体特征 -> 体素网格
+        # 5. 视锥体特征 -> 体素网格 
         voxel_feat = self.frustum2voxel(frustum_feat, self.voxel_grid, ego2img)
         # (B, C, Z, Y, X)
 
@@ -1181,10 +1182,7 @@ def caddn_loss_paper_level(
 # 以下部分是测试和演示代码
 # =========================================================
 
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
 
 # 注意：上面的代码已经包含了所有必要的模块
 # 这里不需要重复导入
