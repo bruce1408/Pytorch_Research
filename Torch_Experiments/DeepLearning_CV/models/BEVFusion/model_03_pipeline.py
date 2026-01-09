@@ -77,8 +77,11 @@ class SimpleBackbone(nn.Module):
 class DepthContextNet(nn.Module):
     def __init__(self, cfg: Cfg):
         super().__init__()
+        
         self.cfg = cfg
+        
         out_c = cfg.cam_depth_bins + cfg.cam_ctx_c
+        
         self.head = nn.Sequential(
             nn.Conv2d(cfg.cam_feat_c, cfg.cam_feat_c, 3, padding=1),
             nn.ReLU(inplace=True),
@@ -119,6 +122,7 @@ class CameraViewTransformerLSS(nn.Module):
         # depth bin centers in meters (linear)
         z_min = 1.0
         z_max = 60.0
+        
         self.register_buffer(
             "depth_values",
             torch.linspace(z_min, z_max, cfg.cam_depth_bins).view(1, 1, cfg.cam_depth_bins, 1, 1),
@@ -193,6 +197,7 @@ class CameraViewTransformerLSS(nn.Module):
         # -------- C) prepare features to splat --------
         # context: (B,N,Cctx,Hf,Wf) -> (B,N,1,Cctx,Hf,Wf)
         ctx = context.unsqueeze(2)  # (B,N,1,Cctx,Hf,Wf)
+        
         # depth_prob: (B,N,D,Hf,Wf) -> (B,N,D,1,Hf,Wf)
         dp = depth_prob.unsqueeze(3)
 
@@ -254,6 +259,7 @@ class PointsToBEV(nn.Module):
     def __init__(self, cfg: Cfg):
         super().__init__()
         self.cfg = cfg
+        
         # embed point feature (x,y,z,i) -> pts_embed_c
         self.mlp = nn.Sequential(
             nn.Linear(cfg.pts_feat_in, cfg.pts_embed_c),
@@ -261,6 +267,7 @@ class PointsToBEV(nn.Module):
             nn.Linear(cfg.pts_embed_c, cfg.pts_embed_c),
             nn.ReLU(inplace=True),
         )
+        
         # project to bev_c
         self.proj = nn.Sequential(
             nn.Conv2d(cfg.pts_embed_c, cfg.bev_c, 1),
@@ -284,8 +291,10 @@ class PointsToBEV(nn.Module):
         x = points[..., 0]
         y = points[..., 1]
 
+        # bev网格id
         ix = torch.floor((x - x_min) / mx).long()
         iy = torch.floor((y - y_min) / my).long()
+        
         valid = (ix >= 0) & (ix < cfg.bev_w) & (iy >= 0) & (iy < cfg.bev_h)
 
         ind = (iy * cfg.bev_w + ix).clamp(0, cfg.bev_h * cfg.bev_w - 1)  # (B,Np)
@@ -406,15 +415,16 @@ class CenterHead(nn.Module):
 class BEVFusionModel(nn.Module):
     """
     Inputs:
-      imgs:        (B,Ncam,3,H,W)
-      points:      (B,Npts,4)   (ego frame)
-      intrinsics:  (B,Ncam,3,3)
-      cam2ego:     (B,Ncam,4,4)
+        imgs:        (B,Ncam,3,H,W)
+        points:      (B,Npts,4)   (ego frame)
+        intrinsics:  (B,Ncam,3,3)
+        cam2ego:     (B,Ncam,4,4)
 
     Output:
-      preds: (B,7,Hbev,Wbev)
-      aux:   dict of intermediate tensors
+        preds: (B,7,Hbev,Wbev)
+        aux:   dict of intermediate tensors
     """
+    
     def __init__(self, cfg: Cfg):
         super().__init__()
         self.cfg = cfg
@@ -434,14 +444,21 @@ class BEVFusionModel(nn.Module):
         self.head = CenterHead(cfg)
 
     def forward(self, imgs, points, intrinsics, cam2ego):
+        
         img_feats = self.backbone(imgs)                            # (B,N,C,Hf,Wf)
-        depth_prob, context = self.depth_ctx(img_feats)            # (B,N,D,Hf,Wf), (B,N,Cctx,Hf,Wf)
-        cam_bev = self.view_tf(depth_prob, context, intrinsics, cam2ego)  # (B,bev_c,H,W)
+        
+        # 获取深度估计和语义特征 (B,N,D,Hf,Wf), (B,N,Cctx,Hf,Wf)
+        depth_prob, context = self.depth_ctx(img_feats)            
+        
+        # (B,bev_c,H,W)
+        cam_bev = self.view_tf(depth_prob, context, intrinsics, cam2ego)  
 
+        # 激光雷达数据进行处理
         pts_bev = self.pts_bev(points)                             # (B,bev_c,H,W)
 
+        # 特征融合
         fused = self.fusion(cam_bev, pts_bev)                      # (B,bev_c,H,W)
-
+        
         preds = self.head(fused)                                   # (B,7,H,W)
 
         aux = {"cam_bev": cam_bev, "pts_bev": pts_bev, "fused_bev": fused}
@@ -459,9 +476,10 @@ def main():
     B = 2
     imgs = torch.randn(B, cfg.num_cams, 3, cfg.img_h, cfg.img_w, device=device)
 
-    # points in ego frame (x,y,z,i)
+    # points in ego frame (x,y,z,i) 模拟 激光雷达数据
     Npts = 40000
     points = torch.randn(B, Npts, 4, device=device)
+    
     # make x,y roughly inside range
     points[..., 0] = points[..., 0].clamp(-60, 60)
     points[..., 1] = points[..., 1].clamp(-60, 60)
