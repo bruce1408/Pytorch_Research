@@ -25,7 +25,7 @@ class Cfg:
     pc_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
     bev_h = 128
     bev_w = 128
-    bev_z = 8          # <- 新增：BEV 高度 bins（论文实现通常不会直接丢 z）
+    bev_z = 8          # <- 新增：BEV 高度 bins
 
 
     # meter per BEV pixel
@@ -50,131 +50,189 @@ class Cfg:
 
 class SparseDepthLabeler(nn.Module):
     """
-        Project ego-frame points to each camera, build sparse depth labels on feature grid.
-        Output:
-        depth_labels: (B,N,Hf,Wf) with int in [0..D-1] or -1(ignore)
+    稀疏深度标签生成器
+    
+    功能：
+    1. 将点云（ego坐标系）投影到每个相机视角
+    2. 计算每个点在特征图上的位置
+    3. 将点的真实深度值转换为深度bin标签（0到D-1）
+    4. 生成稀疏的深度标签图，用于监督深度估计网络
+    
+    输出：
+    depth_labels: (B, N, Hf, Wf) 
+        - B: batch size
+        - N: 相机数量
+        - Hf, Wf: 特征图高度和宽度
+        - 值：深度bin索引 [0..D-1] 或 -1（忽略/无效位置）
     """
     def __init__(self, cfg: Cfg, depth_values: torch.Tensor):
         super().__init__()
         self.cfg = cfg
-        # depth_values: (1,1,D,1,1) -> (D,)
+        
+        # ========== 步骤1：存储深度值 ==========
+        # depth_values: (1,1,D,1,1) -> (D,) - 深度bin的中心值
+        # 例如：D=48，深度范围[0.5, 80.0]米，均匀分布
+        # depth_values = [0.5, 1.2, 1.9, ..., 80.0]
         dv = depth_values.reshape(-1).detach().cpu()
-        self.register_buffer("depth_values_1d", torch.tensor(dv), persistent=False)
-
-        # build bin edges for bucketize (linear bins works well here)
-        # edges length D+1
+        self.register_buffer("depth_values_1d", dv, persistent=False)
+        
+        # ========== 步骤2：构建深度bin边界 ==========
+        # 为了使用bucketize函数，需要构建bin的边界
+        # 例如：如果depth_values = [1.0, 2.0, 3.0]
+        # 则bin_edges = [0.5, 1.5, 2.5, 3.5]
+        # 这样可以将深度值映射到对应的bin索引
         if len(dv) >= 2:
-            step = float(dv[1] - dv[0])
+            step = float(dv[1] - dv[0])  # 计算bin的步长
         else:
             step = 1.0
-        edges = torch.tensor([dv[0] - step / 2] + [float(x + step / 2) for x in dv], dtype=torch.float32)
+        
+        # 构建边界：每个bin的左右边界
+        edges = torch.tensor(
+            [dv[0] - step / 2] + [float(x + step / 2) for x in dv], 
+            dtype=torch.float32
+        )
+        
         self.register_buffer("bin_edges", edges, persistent=False)
 
     @torch.no_grad()
     def forward(self, points_ego, intrinsics, cam2ego, feat_hw):
         """
-            points_ego: (B,Npts,3 or 4) [x,y,z,(i)]
-            intrinsics: (B,N,3,3)
-            cam2ego:    (B,N,4,4)
-            feat_hw:    (Hf,Wf)
+        前向传播：生成深度标签
+        
+        Args:
+            points_ego: (B, Npts, 3 or 4) 
+                - 点云在ego坐标系中的坐标 [x, y, z, (intensity)]
+                - 这些是LiDAR/Radar的真实点云数据
+            intrinsics: (B, N, 3, 3)
+                - 相机内参矩阵（每个相机一个）
+            cam2ego: (B, N, 4, 4)
+                - 相机到ego坐标系的变换矩阵
+            feat_hw: (Hf, Wf)
+                - 特征图的高度和宽度
+        
+        Returns:
+            labels: (B, N, Hf, Wf)
+                - 深度标签图，每个位置的值是深度bin索引 [0..D-1]
+                - -1 表示该位置没有有效的深度标签（点云未覆盖）
         """
         cfg = self.cfg
         B, Npts, Pdim = points_ego.shape
         Ncam = intrinsics.shape[1]
         Hf, Wf = feat_hw
         device = points_ego.device
-
-        # init: -1 ignore
-        labels = torch.full((B, Ncam, Hf, Wf), -1, device=device, dtype=torch.long)
-
-        # ego2cam
-        ego2cam = torch.inverse(cam2ego)  # (B,N,4,4)
-
-        # points homogeneous
-        pts = points_ego[..., :3]
+        
+        # ========== 初始化：所有位置标记为无效 ==========
+        labels = torch.full((B, Ncam, Hf, Wf), -1, 
+                           device=device, dtype=torch.long)
+        
+        # ========== 坐标变换：ego -> camera ==========
+        # 计算ego到相机的变换矩阵
+        ego2cam = torch.inverse(cam2ego)  # (B, N, 4, 4)
+        
+        # 将点转换为齐次坐标
+        pts = points_ego[..., :3]  # 只取x, y, z
         ones = torch.ones((B, Npts, 1), device=device, dtype=pts.dtype)
-        pts_h = torch.cat([pts, ones], dim=-1)  # (B,Npts,4)
-
-        stride = float(cfg.feat_stride)
+        pts_h = torch.cat([pts, ones], dim=-1)  # (B, Npts, 4)
+        
+        stride = float(cfg.feat_stride)  # 特征图下采样倍数（通常是4）
         img_h, img_w = cfg.img_h, cfg.img_w
-
-        # loop over cams (Ncam is small=6, loop is fine and clear)
+        
+        # ========== 遍历每个相机 ==========
         for n in range(Ncam):
-            T = ego2cam[:, n, :, :]  # (B,4,4)
-
+            T = ego2cam[:, n, :, :]  # (B, 4, 4) - 当前相机的变换矩阵
+            
+            # 将点从ego坐标系变换到相机坐标系
             # p_cam = T @ p_ego
-            p_cam = torch.matmul(T, pts_h.transpose(1, 2)).transpose(1, 2)  # (B,Npts,4)
-            x = p_cam[..., 0]
-            y = p_cam[..., 1]
-            z = p_cam[..., 2]
-
-            # in front
-            m_front = z > 0.1
-
-            fx = intrinsics[:, n, 0, 0].view(B, 1)
-            fy = intrinsics[:, n, 1, 1].view(B, 1)
-            cx = intrinsics[:, n, 0, 2].view(B, 1)
-            cy = intrinsics[:, n, 1, 2].view(B, 1)
-
-            u = fx * (x / z.clamp(min=1e-6)) + cx
-            v = fy * (y / z.clamp(min=1e-6)) + cy
-
-            # inside image
+            p_cam = torch.matmul(T, pts_h.transpose(1, 2)).transpose(1, 2)  # (B, Npts, 4)
+            x = p_cam[..., 0]  # 相机坐标系X
+            y = p_cam[..., 1]  # 相机坐标系Y
+            z = p_cam[..., 2]  # 深度（相机坐标系Z）
+            
+            # ========== 有效性检查1：点在相机前方 ==========
+            m_front = z > 0.1  # 只保留深度>0.1米的点（避免数值不稳定）
+            
+            # ========== 投影到图像平面 ==========
+            # 使用相机内参将3D点投影到2D图像
+            fx = intrinsics[:, n, 0, 0].view(B, 1)  # 焦距x
+            fy = intrinsics[:, n, 1, 1].view(B, 1)  # 焦距y
+            cx = intrinsics[:, n, 0, 2].view(B, 1)  # 主点x
+            cy = intrinsics[:, n, 1, 2].view(B, 1)  # 主点y
+            
+            # 透视投影：u = fx * (x/z) + cx, v = fy * (y/z) + cy
+            u = fx * (x / z.clamp(min=1e-6)) + cx  # 像素坐标u
+            v = fy * (y / z.clamp(min=1e-6)) + cy  # 像素坐标v
+            
+            # ========== 有效性检查2：点在图像范围内 ==========
             m_img = (u >= 0) & (u <= img_w - 1) & (v >= 0) & (v <= img_h - 1)
-
+            
+            # 综合有效性：前方 + 图像范围内
             m = m_front & m_img
             if not m.any():
-                continue
-
-            # feature indices
-            uf = torch.floor(u / stride).long()
-            vf = torch.floor(v / stride).long()
-
+                continue  # 如果没有有效点，跳过这个相机
+            
+            # ========== 计算特征图坐标 ==========
+            # 将像素坐标转换为特征图坐标（考虑下采样）
+            uf = torch.floor(u / stride).long()  # 特征图u坐标
+            vf = torch.floor(v / stride).long()  # 特征图v坐标
+            
+            # ========== 有效性检查3：点在特征图范围内 ==========
             m_feat = (uf >= 0) & (uf < Wf) & (vf >= 0) & (vf < Hf)
             m = m & m_feat
             if not m.any():
                 continue
-
-            # For each feature cell, keep nearest depth (min z)
-            # We do a "scatter min" using linear index + sort trick.
-            # idx = vf*Wf + uf
-            idx = (vf * Wf + uf)  # (B,Npts)
-
+            
+            # ========== 关键步骤：为每个特征图位置选择最近的深度 ==========
+            # 策略：如果多个点投影到同一个特征图位置，选择深度最小的（最近的）
+            # 这符合"最近点优先"的原则
+            
+            # 计算线性索引：将2D坐标转换为1D索引
+            idx = (vf * Wf + uf)  # (B, Npts)
+            
+            # 对每个batch分别处理
             for b in range(B):
-                mb = m[b]
+                mb = m[b]  # 当前batch的有效点掩码
                 if not mb.any():
                     continue
-
-                idx_b = idx[b, mb]          # (K,)
-                z_b = z[b, mb]              # (K,)
-
-                # sort by idx then by depth
-                # If we sort by (idx, z), the first occurrence per idx is nearest depth.
-                order = torch.argsort(idx_b * 1e6 + z_b)  # stable enough for typical ranges
-                idx_s = idx_b[order]
-                z_s = z_b[order]
-
-                # pick first for each unique idx
+                
+                idx_b = idx[b, mb]  # (K,) - 有效点的特征图索引
+                z_b = z[b, mb]      # (K,) - 有效点的深度值
+                
+                # ========== 排序技巧：实现"scatter min" ==========
+                # 目标：对于每个唯一的特征图位置，找到深度最小的点
+                # 方法：按 (索引, 深度) 排序，然后取每个索引的第一个
+                
+                # 排序键：idx * 1e6 + z
+                # 这样先按索引排序，索引相同时按深度排序
+                # 深度小的排在前面
+                order = torch.argsort(idx_b * 1e6 + z_b)
+                idx_s = idx_b[order]  # 排序后的索引
+                z_s = z_b[order]      # 排序后的深度
+                
+                # ========== 提取每个唯一索引的第一个点 ==========
+                # 因为已经排序，相同索引的点中，深度最小的在第一个
                 first = torch.ones_like(idx_s, dtype=torch.bool)
-                first[1:] = idx_s[1:] != idx_s[:-1]
-
-                idx_u = idx_s[first]
-                z_u = z_s[first]
-
-                # map depth -> bin label
-                # bucketize with edges -> [0..D-1]
-                d = z_u.clamp(min=float(self.bin_edges[0].item() + 1e-3),
-                              max=float(self.bin_edges[-1].item() - 1e-3))
+                first[1:] = idx_s[1:] != idx_s[:-1]  # 标记每个唯一索引的第一个
+                
+                idx_u = idx_s[first]  # 唯一的特征图索引
+                z_u = z_s[first]       # 对应的深度值（最近的）
+                
+                # ========== 将深度值映射到深度bin ==========
+                # 使用bucketize函数将连续深度值映射到离散的bin索引
+                d = z_u.clamp(
+                    min=float(self.bin_edges[0].item() + 1e-3),
+                    max=float(self.bin_edges[-1].item() - 1e-3)
+                )
+                # bucketize返回的是bin索引（1-based），需要减1转为0-based
                 bin_id = torch.bucketize(d, self.bin_edges.to(device=d.device, dtype=d.dtype)) - 1
                 bin_id = bin_id.clamp(0, len(self.depth_values_1d) - 1).long()
-
-                # write to labels[b,n,:,:]
-                vf_u = (idx_u // Wf).long()
-                uf_u = (idx_u % Wf).long()
+                
+                # ========== 写入标签 ==========
+                # 将bin索引写入对应的特征图位置
+                vf_u = (idx_u // Wf).long()  # 从线性索引恢复v坐标
+                uf_u = (idx_u % Wf).long()   # 从线性索引恢复u坐标
                 labels[b, n, vf_u, uf_u] = bin_id
-
-        return labels  # (B,N,Hf,Wf)
-
+        
+        return labels  # (B, N, Hf, Wf)
 
 def depth_ce_loss(depth_logits, depth_labels, ignore_index=-1):
     """
@@ -349,7 +407,7 @@ class CameraViewTransformerLSSVoxel(nn.Module):
         pts_ego = torch.matmul(T, pts_cam_h.unsqueeze(-1)).squeeze(-1)[..., :3]  # (B,N,D,Hf,Wf,3)
 
         # ---- C) lift features (depth-weighted context) ----
-        # (B,N,D,Cctx,Hf,Wf)
+        # (B,N,D,Cctx,Hf,Wf) 视锥体特征
         feat_lift = depth_prob.unsqueeze(3) * context.unsqueeze(2)
 
         # ---- D) voxelize: map (x,y,z)->(ix,iy,iz) ----
@@ -362,6 +420,7 @@ class CameraViewTransformerLSSVoxel(nn.Module):
         y = pts_ego[..., 1]
         z = pts_ego[..., 2]
 
+        # 计算 bev 网格
         ix = torch.floor((x - x_min) / mx).long()
         iy = torch.floor((y - y_min) / my).long()
         iz = torch.floor((z - z_min) / mz).long()
@@ -428,66 +487,169 @@ class CameraViewTransformerLSSVoxel(nn.Module):
 #      - per cell: mean of embedded point features
 # =========================================================
 class PointsToBEV(nn.Module):
+    """
+    点云到BEV特征图的转换模块
+    
+    功能：
+    将LiDAR/Radar点云数据转换为BEV（Bird's Eye View）特征图。
+    这是BEVFusion中处理点云数据的核心模块。
+    
+    算法流程：
+    1. 将每个点云的特征（x, y, z, intensity）通过MLP编码为特征向量
+    2. 将3D点投影到2D BEV网格（忽略Z轴，只使用X-Y平面）
+    3. 使用scatter操作将点特征聚合到对应的BEV网格单元
+    4. 对每个网格单元内的点特征求平均（mean pooling）
+    5. 通过卷积层将聚合后的特征投影到目标通道数
+    
+    输入：点云数据 (B, Npts, 4) - [x, y, z, intensity]
+    输出：BEV特征图 (B, bev_c, Hbev, Wbev)
+    """
     def __init__(self, cfg: Cfg):
         super().__init__()
         self.cfg = cfg
         
-        # embed point feature (x,y,z,i) -> pts_embed_c
+        # ========== 点特征编码器 (Point Feature Embedding) ==========
+        # 功能：将每个点的原始特征（x, y, z, intensity）编码为高维特征向量
+        # 输入：4维点特征 [x, y, z, intensity]
+        # 输出：pts_embed_c 维的特征向量
+        # 
+        # 为什么需要编码？
+        # - 原始点特征（坐标+强度）信息有限
+        # - 通过MLP学习更丰富的特征表示
+        # - 为后续的特征融合做准备
         self.mlp = nn.Sequential(
-            nn.Linear(cfg.pts_feat_in, cfg.pts_embed_c),
-            nn.ReLU(inplace=True),
-            nn.Linear(cfg.pts_embed_c, cfg.pts_embed_c),
-            nn.ReLU(inplace=True),
+            nn.Linear(cfg.pts_feat_in, cfg.pts_embed_c),  # 第一层：4 -> 80
+            nn.ReLU(inplace=True),                         # 激活函数
+            nn.Linear(cfg.pts_embed_c, cfg.pts_embed_c),  # 第二层：80 -> 80
+            nn.ReLU(inplace=True),                         # 激活函数
         )
         
-        # project to bev_c
+        # ========== BEV特征投影层 ==========
+        # 功能：将聚合后的点特征投影到目标BEV通道数
+        # 输入：(B, pts_embed_c, H, W) - 聚合后的点特征
+        # 输出：(B, bev_c, H, W) - 最终BEV特征图
+        # 
+        # 为什么需要投影？
+        # - 统一特征维度，便于与相机BEV特征融合
+        # - 进一步提取和压缩特征
         self.proj = nn.Sequential(
-            nn.Conv2d(cfg.pts_embed_c, cfg.bev_c, 1),
-            nn.BatchNorm2d(cfg.bev_c),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(cfg.pts_embed_c, cfg.bev_c, 1),  # 1x1卷积：降维/升维
+            nn.BatchNorm2d(cfg.bev_c),                  # 批归一化：稳定训练
+            nn.ReLU(inplace=True),                      # 激活函数
         )
 
+
+    
+    
     def forward(self, points):
         """
-        points: (B, Npts, 4) -> [x,y,z,intensity] in meters (ego frame)
-        return: pts_bev: (B, bev_c, Hbev, Wbev)
+            前向传播：将点云转换为BEV特征图
+            
+            Args:
+                points: (B, Npts, 4) 
+                    - B: batch size
+                    - Npts: 点云中的点数（每帧可能不同，但这里假设已padding到相同长度）
+                    - 4: [x, y, z, intensity]
+                        * x, y, z: 点在世界坐标系（ego frame）中的坐标（单位：米）
+                        * intensity: 点云强度值（LiDAR反射强度或Radar信号强度）
+            
+            Returns:
+                pts_bev: (B, bev_c, Hbev, Wbev)
+                    - BEV特征图，每个像素代表一个BEV网格单元
+                    - 特征值是该网格内所有点特征的聚合结果
         """
         cfg = self.cfg
         B, Np, Fdim = points.shape
         device, dtype = points.device, points.dtype
 
+        # ========== 步骤1：计算BEV网格的分辨率 ==========
+        # 从点云范围（pc_range）和BEV尺寸计算每个网格单元的大小
+        # pc_range: [x_min, y_min, z_min, x_max, y_max, z_max]
         x_min, y_min, _, x_max, y_max, _ = cfg.pc_range
+        
+        # mx: X方向每个网格单元的大小（米）
+        # 例如：x范围100米，bev_w=128 -> mx = 100/128 ≈ 0.78米/像素
         mx = (x_max - x_min) / cfg.bev_w
+        
+        # my: Y方向每个网格单元的大小（米）
         my = (y_max - y_min) / cfg.bev_h
+        HW = cfg.bev_h * cfg.bev_w
 
+        # ========== 步骤2：提取点的X-Y坐标 ==========
+        # 注意：BEV是俯视图，只使用X-Y坐标，忽略Z轴
         x = points[..., 0]
         y = points[..., 1]
-
-        # bev网格id
+        
+        # ========== 步骤3：计算每个点对应的BEV网格索引 ==========
+        # 将连续的世界坐标转换为离散的网格索引
+        # 公式：grid_idx = floor((coord - min) / grid_size)
+        # 例如：x=0, x_min=-50, mx=0.78 -> ix = floor((0-(-50))/0.78) = floor(64.1) = 64
         ix = torch.floor((x - x_min) / mx).long()
         iy = torch.floor((y - y_min) / my).long()
-        
+
+
+        # ========== 步骤4：有效性检查 ==========
+        # 过滤掉超出BEV范围的点（这些点可能是噪声或无效数据）
         valid = (ix >= 0) & (ix < cfg.bev_w) & (iy >= 0) & (iy < cfg.bev_h)
 
-        ind = (iy * cfg.bev_w + ix).clamp(0, cfg.bev_h * cfg.bev_w - 1)  # (B,Np)
+        # ========== 步骤5：计算线性索引 ==========
+        # 将2D网格索引 (iy, ix) 转换为1D线性索引
+        # 公式：linear_idx = iy * W + ix
+        # 这样可以将2D BEV网格展平为1D数组，便于后续的scatter操作
+        ind = (iy * cfg.bev_w + ix)
+        
+        
+        # 只保留 valid 的点
+        if valid.any():
+            # 取有效点的 (b_idx, ind)
+            b_idx = torch.arange(B, device=device).view(B, 1).expand(B, Np)
+            b_idx = b_idx[valid]               # (M,)
+            ind_v = ind[valid].clamp(0, HW-1)  # (M,)
 
-        # embed each point: (B,Np,pts_embed_c)
-        pts_emb = self.mlp(points)  # uses x,y,z,i (could add radar vel)
+            # ========== 步骤6：点特征编码 ==========
+            # 将每个点的原始特征（x, y, z, intensity）通过MLP编码为高维特征，只对有效点做 MLP，避免对 padding 点白算
+            # 输入：(B, Np, 4) -> 输出：(B, Np, pts_embed_c)
+            # 例如：(B, 10000, 4) -> (B, 10000, 80)
+            pts_v = points[valid]              # (M, 4)
+            pts_emb_v = self.mlp(pts_v)        # (M, C)
+            C = pts_emb_v.shape[1]
 
-        # scatter mean: sum / count
-        bev_sum = torch.zeros(B, cfg.pts_embed_c, cfg.bev_h * cfg.bev_w, device=device, dtype=dtype)
-        bev_cnt = torch.zeros(B, 1, cfg.bev_h * cfg.bev_w, device=device, dtype=dtype)
+            # 全局索引：0..B*HW-1
+            g = b_idx * HW + ind_v             # (M,)
 
-        for b in range(B):
-            m = valid[b]
-            if m.any():
-                bev_sum[b].index_add_(dim=1, index=ind[b][m], source=pts_emb[b][m].t())
-                ones = torch.ones(ind[b][m].shape[0], device=device, dtype=dtype).view(1, -1)
-                bev_cnt[b].index_add_(dim=1, index=ind[b][m], source=ones)
+            # ========== 步骤7：Scatter聚合操作 ==========
+            # 将点特征聚合到对应的BEV网格单元
+            # 策略：使用 mean pooling（平均值池化）
+            # 实现方式：先求和，再除以计数
+        
+            # 初始化聚合容器
+            # bev_sum: 存储每个网格单元内所有点特征的和
+            bev_sum = torch.zeros((B * HW, C), device=device, dtype=pts_emb_v.dtype)
+            bev_cnt = torch.zeros((B * HW,), device=device, dtype=pts_emb_v.dtype)
 
-        bev_mean = bev_sum / bev_cnt.clamp(min=1.0)
-        pts_bev = bev_mean.view(B, cfg.pts_embed_c, cfg.bev_h, cfg.bev_w)
-        pts_bev = self.proj(pts_bev)  # (B, bev_c, H, W)
+            bev_sum.index_add_(0, g, pts_emb_v)
+            bev_cnt.index_add_(0, g, torch.ones_like(g, dtype=pts_emb_v.dtype))
+
+            # ========== 步骤8：计算平均值 ==========
+            # mean = sum / count
+            # clamp(min=1.0) 防止除零（如果某个网格没有点，count=0，则结果为0）
+            bev_mean = bev_sum / bev_cnt.clamp(min=1.0).unsqueeze(-1)  # (B*HW, C)
+            
+            # ========== 步骤9：重塑为2D BEV特征图 ==========
+            # (B, pts_embed_c, H*W) -> (B, pts_embed_c, H, W)
+            pts_bev = bev_mean.view(B, HW, C).permute(0, 2, 1).contiguous()
+            pts_bev = pts_bev.view(B, C, cfg.bev_h, cfg.bev_w)
+        
+        else:    
+            # 没有有效点
+            C = cfg.pts_embed_c
+            pts_bev = torch.zeros((B, C, cfg.bev_h, cfg.bev_w), device=device, dtype=dtype)
+
+        # ========== 步骤10：特征投影 ==========
+        # 通过卷积层将特征投影到目标通道数
+        # (B, pts_embed_c, H, W) -> (B, bev_c, H, W)
+        # 例如：(B, 80, 128, 128) -> (B, 128, 128, 128)
+        pts_bev = self.proj(pts_bev)
         return pts_bev
 
 
@@ -555,16 +717,27 @@ class BEVFusion(nn.Module):
         # flatten HW tokens: Q=cam, K/V=pts
         B, C, H, W = cam_bev.shape
         
-        q = self.q(cam_bev).flatten(2).transpose(1, 2)  # (B,HW,C)
-        k = self.k(pts_bev).flatten(2)                  # (B,C,HW)
-        v = self.v(pts_bev).flatten(2).transpose(1, 2)  # (B,HW,C)
+        # (B,HW,C)
+        q = self.q(cam_bev).flatten(2).transpose(1, 2)  
+        
+        # (B,C,HW)
+        k = self.k(pts_bev).flatten(2)               
+        
+        # (B,HW,C)   
+        v = self.v(pts_bev).flatten(2).transpose(1, 2)  
 
-        attn = torch.matmul(q, k) / math.sqrt(C)        # (B,HW,HW)
+        # (B,HW,HW)
+        attn = torch.matmul(q, k) / math.sqrt(C)        
         attn = F.softmax(attn, dim=-1)
-        out = torch.matmul(attn, v)                     # (B,HW,C)
+        out = torch.matmul(attn, v)   
+        
+        # (B,HW,C)                  
         out = out.transpose(1, 2).view(B, C, H, W)
+        
         out = self.proj(out)
-        return out + cam_bev  # residual
+        
+        # residual
+        return out + cam_bev  
 
 
 # =========================================================
@@ -652,20 +825,24 @@ class BEVFusionModel(nn.Module):
 
 
 def gaussian2d(shape, sigma=1.0, device="cpu", dtype=torch.float32):
+    
     m, n = [(ss - 1.) / 2. for ss in shape]
+    
     y, x = torch.meshgrid(
         torch.arange(-m, m + 1, device=device, dtype=dtype),
         torch.arange(-n, n + 1, device=device, dtype=dtype),
         indexing="ij"
     )
+    
     h = torch.exp(-(x * x + y * y) / (2 * sigma * sigma))
     return h
 
 def draw_gaussian(heatmap, center, radius=2, sigma=1.0):
     """
-    heatmap: (H,W)
-    center: (x,y)
+        heatmap: (H,W)
+        center: (x,y)
     """
+    
     H, W = heatmap.shape
     x, y = center
     x, y = int(x), int(y)
