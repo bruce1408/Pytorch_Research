@@ -1023,6 +1023,7 @@ if __name__ == "__main__":
     ).to(device)
     
     criterion = ToySetCriterion(num_classes=num_classes)
+    
     optimizer = torch.optim.AdamW(
         list(backbone.parameters()) + list(model.parameters()), lr=1e-4, weight_decay=1e-4
     )
@@ -1030,6 +1031,7 @@ if __name__ == "__main__":
     # 2. 构造随机数据的 train/val dataloader
     train_dataset = RandomDetectionDataset(num_samples=50, num_classes=num_classes, image_size=800)
     val_dataset = RandomDetectionDataset(num_samples=20, num_classes=num_classes, image_size=800)
+    
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=4, shuffle=True, collate_fn=collate_fn
     )
