@@ -169,7 +169,7 @@ class MSDeformAttn(nn.Module):
         Args:
             query: (B, Len_Q, d_model) Query 特征
             reference_points: (B, Len_Q, 2) 参考点坐标（归一化到 [0,1]）
-            input_flatten: (B, Len_V, d_model) 展平的多尺度特征
+            input_flatten: (B, Len_V, d_model) 展平的多尺度特征 = src
             spatial_shapes: (n_levels, 2) 每个 level 的 (H, W)
             level_start_index: (n_levels,) 每个 level 在 input_flatten 中的起始索引
         
@@ -270,11 +270,11 @@ class MSDeformAttn(nn.Module):
 # ==========================================
 class DeformableTransformerEncoderLayer(nn.Module):
     """
-    Deformable Transformer Encoder 的一层
-    
-    结构：
-    1. Self-Attention（可变形注意力）：特征图内部的自注意力
-    2. FFN（前馈网络）：两层 MLP
+        Deformable Transformer Encoder 的一层
+        
+        结构：
+        1. Self-Attention 可变形注意力 : 特征图内部的自注意力
+        2. FFN -> 前馈网络 : 两层 MLP
     """
     
     def __init__(self, d_model=256, d_ffn=1024, dropout=0.1, n_levels=4, n_heads=8, n_points=4):
@@ -293,40 +293,70 @@ class DeformableTransformerEncoderLayer(nn.Module):
         self.dropout3 = nn.Dropout(dropout)
         self.norm2 = nn.LayerNorm(d_model)
 
-    def forward(self, src, pos, reference_points, spatial_shapes, level_start_index):
+    def forward(self, 
+                features, 
+                pos_embed,
+                reference_points, 
+                spatial_shapes,
+                level_start_index
+            ):
         """
         Args:
-            src: (B, Len, d_model) 输入特征
-            pos: (B, Len, d_model) 位置编码
+            features: (B, Len, d_model) 输入特征
+            pos_embed: (B, Len, d_model) 位置编码
             reference_points: (B, Len, 2) 参考点
             spatial_shapes: (n_levels, 2) 空间形状
             level_start_index: (n_levels,) level 起始索引
         """
         
         # Self-Attention：Query = Key = Value = src + pos
-        q = src + pos
+        query_with_pos = features + pos_embed
         
-        src2 = self.self_attn(q, reference_points, src, spatial_shapes, level_start_index)
-        src = self.norm1(src + self.dropout1(src2))
+        attended_features = self.self_attn(
+            query_with_pos, 
+            reference_points=reference_points, 
+            input_flatten=features, 
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index
+        )
+        
+        features = self.norm1(features + self.dropout1(attended_features))
         
         # FFN
-        src2 = self.linear2(self.dropout2(self.activation(self.linear1(src))))
-        src = self.norm2(src + self.dropout3(src2))
+        ffn_output = self.linear2(self.dropout2(self.activation(self.linear1(features))))
+        features = self.norm2(features + self.dropout3(ffn_output))
         
-        return src
+        return features
 
 class DeformableTransformerEncoder(nn.Module):
     """
-    Deformable Transformer Encoder（多层堆叠）
+    Deformable Transformer Encoder (多层堆叠)
     """
     def __init__(self, encoder_layer, num_layers):
         super().__init__()
         self.layers = _get_clones(encoder_layer, num_layers)
 
-    def forward(self, src, pos, reference_points, spatial_shapes, level_start_index):
+    def forward(self, 
+                features, 
+                pos_embed, 
+                reference_points, 
+                spatial_shapes, 
+                level_start_index
+            ):
+        
+        output_features = features
+
         for layer in self.layers:
-            src = layer(src, pos, reference_points, spatial_shapes, level_start_index)
-        return src
+            
+            # -- 明确 layer 调用的参数名 --
+            output_features = layer(
+                features=output_features,
+                pos_embed=pos_embed,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index
+            )
+        return output_features
 
 # ==========================================
 # 5. Decoder 实现 (关键补充部分)
@@ -360,11 +390,19 @@ class DeformableTransformerDecoderLayer(nn.Module):
         self.dropout4 = nn.Dropout(dropout)
         self.norm3 = nn.LayerNorm(d_model)
 
-    def forward(self, tgt, query_pos, reference_points, src, src_spatial_shapes, level_start_index):
+    def forward(self,
+                object_queries,             # tgt
+                query_pos_embed,            # query_pos,
+                query_reference_points,     # reference_points,
+                memory,                     # src,
+                memory_spatial_shapes,      # src_spatial_shapes,
+                memory_level_start_index,   # level_start_index
+            ):
+        
         """
         Args:
             tgt: (B, Nq, d_model) Object Query 的内容特征
-            query_pos: (B, Nq, d_model) Object Query 的位置编码（可学习）
+            query_pos_embed: (B, Nq, d_model) Object Query 的位置编码（可学习）
             reference_points: (B, Nq, 2) 参考点坐标（用于可变形注意力）
             src: (B, Len, d_model) Encoder 输出
             src_spatial_shapes: (n_levels, 2) 空间形状
@@ -373,30 +411,35 @@ class DeformableTransformerDecoderLayer(nn.Module):
         
         # 1. Self Attention
         # Object Queries 之间的自注意力（让它们互相"交流"）
-        # query_pos 是可学习的位置编码
-        q = k = tgt + query_pos
-        tgt2 = self.self_attn(q, k, value=tgt)[0]
-        tgt = self.norm1(tgt + self.dropout1(tgt2))
+        # query_pos_embed 是可学习的位置编码
+        q_with_pos = k_with_pos = object_queries + query_pos_embed
+        attended_queries = self.self_attn(
+                    query=q_with_pos,
+                    key=k_with_pos,
+                    value=object_queries  # Value 是不含位置信息的原始 Object Query
+                )[0]       
+         
+        object_queries = self.norm1(object_queries + self.dropout1(attended_queries))
         
         # 2. Cross Attention (Deformable)
-        # Query = 内容(tgt) + 位置(query_pos)
+        # Query = 内容(tgt) + 位置(query_pos_embed)
         # Reference Points = 动态预测的坐标
         # Value = Encoder Output (src)
-        tgt2 = self.cross_attn(
-            query=tgt + query_pos,
-            reference_points=reference_points,
-            input_flatten=src,
-            spatial_shapes=src_spatial_shapes,
-            level_start_index=level_start_index
+        attended_memory = self.cross_attn(
+            query=object_queries + query_pos_embed,
+            reference_points=query_reference_points,
+            input_flatten=memory,  # Value 来自 Encoder 的输出
+            spatial_shapes=memory_spatial_shapes,
+            level_start_index=memory_level_start_index
         )
         
-        tgt = self.norm2(tgt + self.dropout2(tgt2))
+        object_queries = self.norm2(object_queries + self.dropout2(attended_memory))
         
         # 3. FFN
-        tgt2 = self.linear2(self.dropout3(self.activation(self.linear1(tgt))))
-        tgt = self.norm3(tgt + self.dropout4(tgt2))
+        ffn_output = self.linear2(self.dropout3(self.activation(self.linear1(object_queries))))
+        object_queries = self.norm3(object_queries + self.dropout4(ffn_output))
         
-        return tgt
+        return object_queries
 
 class DeformableTransformerDecoder(nn.Module):
     """
@@ -416,7 +459,15 @@ class DeformableTransformerDecoder(nn.Module):
         # 这里的 bbox_embed 在外部定义并传入
         self.bbox_embed = None 
 
-    def forward(self, tgt, reference_points, src, src_spatial_shapes, level_start_index, query_pos, bbox_embed_layer_list):
+    def forward(self, 
+                object_queries,             # 原名: tgt
+                reference_points,
+                memory,                     # 原名: src
+                memory_spatial_shapes,      # 原名: src_spatial_shapes
+                level_start_index,
+                query_pos_embed,            # 原名: query_pos
+                bbox_embed_layer_list                
+            ):
         """
         Args:
             tgt: (B, Nq, d_model) Object Query 初始内容
@@ -431,7 +482,7 @@ class DeformableTransformerDecoder(nn.Module):
             decoder_outputs: (num_layers, B, Nq, d_model) 每层的输出
             decoder_ref_points: (num_layers, B, Nq, 2) 每层的参考点
         """
-        output = tgt
+        output = object_queries
         decoder_outputs = []
         decoder_ref_points = []
         
@@ -442,12 +493,12 @@ class DeformableTransformerDecoder(nn.Module):
                         
             # 运行 Decoder Layer [B, Nq, 256]
             output = layer(
-                tgt=output,
-                query_pos=query_pos,
-                reference_points=reference_points, 
-                src=src,
-                src_spatial_shapes=src_spatial_shapes,
-                level_start_index=level_start_index
+                object_queries=output,
+                query_pos_embed=query_pos_embed,
+                query_reference_points=reference_points, 
+                memory=memory,
+                memory_spatial_shapes=memory_spatial_shapes,
+                memory_level_start_index=level_start_index
             )
             
             # --- Iterative Bounding Box Refinement ---
@@ -514,8 +565,8 @@ class DeformableDETR(nn.Module):
         
         super().__init__()
         self.d_model = 256
-        self.num_queries = num_queries
-        self.num_feature_levels = num_feature_levels
+        self.num_queries = num_queries # 300 
+        self.num_feature_levels = num_feature_levels  # 4
         
         # --- Backbone (Mock) ---
         # 模拟生成 C3, C4, C5 + C6
@@ -527,7 +578,7 @@ class DeformableDETR(nn.Module):
         ])
         
         # --- Position Embedding ---
-        self.pos_trans = PositionEmbeddingSine(self.d_model // 2)
+        self.pos_trans = PositionEmbeddingSine(self.d_model // 2)  # 256 / 2
         
         # Level Embedding：区分不同 FPN level [4, 256]
         self.level_embed = nn.Parameter(torch.randn(num_feature_levels, self.d_model))
@@ -647,7 +698,7 @@ class DeformableDETR(nn.Module):
             # 生成位置编码
             pos = self.pos_trans(mask)
             
-            # 加上level embedding 层用来区分不同的FPN level
+            # level embedding 层用来区分不同的FPN level + pos_embedding
             pos = pos + self.level_embed[l].view(1, -1, 1, 1) # 加 Level Embed
             pos_embeds.append(pos)
 
@@ -665,19 +716,18 @@ class DeformableDETR(nn.Module):
         
         # 4. 运行 Encoder, 生成 Encoder 网格参考点
         enc_ref_points = self.get_encoder_reference_points(spatial_shapes, device=x.device)
-        
         enc_ref_points = enc_ref_points.unsqueeze(0).repeat(B, 1, 1)
         
         # encoder 
         memory = self.encoder(
-            src=src_flatten,
-            pos=pos_flatten,
+            features=src_flatten,
+            pos_embed=pos_flatten,
             reference_points=enc_ref_points,
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index
         )
         
-        # 5. 准备 Decoder Input, query_embed 拆分为 query_pos 和 tgt
+        # 5. 准备 Decoder Input, query_embed 拆分为 query_pos [300, 256] 和 tgt [300, 256]
         query_pos, tgt = torch.split(self.query_embed.weight, self.d_model, dim=1)
         query_pos = query_pos.unsqueeze(0).expand(B, -1, -1)
         tgt = tgt.unsqueeze(0).expand(B, -1, -1)
@@ -688,12 +738,12 @@ class DeformableDETR(nn.Module):
         
         # 6. 运行 Decoder (Iterative Refinement) 迭代优化 =======
         decoder_outputs_stack, decoder_ref_points_stack = self.decoder(
-            tgt=tgt,
+            object_queries=tgt,
             reference_points=dec_ref_points,
-            src=memory,
-            src_spatial_shapes=spatial_shapes,
+            memory=memory,
+            memory_spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
-            query_pos=query_pos,
+            query_pos_embed=query_pos,
             bbox_embed_layer_list=self.bbox_embed_layer_list # 传入预测头用于中间层修正
         )
         
