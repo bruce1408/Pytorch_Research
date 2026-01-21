@@ -270,27 +270,66 @@ class MSDeformAttn(nn.Module):
 # ==========================================
 class DeformableTransformerEncoderLayer(nn.Module):
     """
-        Deformable Transformer Encoder 的一层
-        
-        结构：
-        1. Self-Attention 可变形注意力 : 特征图内部的自注意力
-        2. FFN -> 前馈网络 : 两层 MLP
+    Deformable Transformer Encoder 单层实现
+    
+    功能说明：
+    - Encoder负责处理输入的多尺度特征图，增强特征表示
+    - 每一层包含两个主要组件：可变形自注意力 + 前馈网络
+    - 通过残差连接和层归一化确保训练稳定性
+    
+    架构流程：
+    输入特征 → Self-Attention(可变形) → Add&Norm → FFN → Add&Norm → 输出特征
+    
+    关键特点：
+    - 使用可变形注意力而非标准注意力，大幅降低计算复杂度
+    - 支持多尺度特征同时处理
+    - 每个位置只关注少量采样点，提高效率
     """
     
     def __init__(self, d_model=256, d_ffn=1024, dropout=0.1, n_levels=4, n_heads=8, n_points=4):
+        """
+        Encoder层初始化
+        
+        Args:
+            d_model (int): 特征维度，默认256
+            d_ffn (int): FFN中间层维度，默认1024 (通常为d_model的4倍)
+            dropout (float): Dropout概率，默认0.1
+            n_levels (int): 多尺度特征层数，默认4 (对应FPN的4个level)
+            n_heads (int): 注意力头数，默认8
+            n_points (int): 每个头每个level的采样点数，默认4
+        """
         super().__init__()
         
-        # Self-Attention（可变形注意力）
+        # ==================== Self-Attention 组件 ====================
+        # 可变形多头注意力机制
+        # 相比标准注意力：O(N²) → O(N×K)，其中K=4为采样点数
         self.self_attn = MSDeformAttn(d_model, n_levels, n_heads, n_points)
+        
+        # 注意力输出后的Dropout，防止过拟合
         self.dropout1 = nn.Dropout(dropout)
+        
+        # 第一个残差连接后的层归一化
+        # 对 (原始特征 + 注意力输出) 进行归一化
         self.norm1 = nn.LayerNorm(d_model)
         
-        # FFN
+        # ==================== FFN (前馈网络) 组件 ====================
+        # 第一层线性变换：d_model → d_ffn (升维)
         self.linear1 = nn.Linear(d_model, d_ffn)
+        
+        # 激活函数：引入非线性变换
         self.activation = nn.ReLU()
+        
+        # 第二层Dropout：在激活函数后应用
         self.dropout2 = nn.Dropout(dropout)
+        
+        # 第二层线性变换：d_ffn → d_model (降维，恢复原维度)
         self.linear2 = nn.Linear(d_ffn, d_model)
+        
+        # FFN输出后的Dropout
         self.dropout3 = nn.Dropout(dropout)
+        
+        # 第二个残差连接后的层归一化
+        # 对 (注意力输出 + FFN输出) 进行归一化
         self.norm2 = nn.LayerNorm(d_model)
 
     def forward(self, 
@@ -312,6 +351,7 @@ class DeformableTransformerEncoderLayer(nn.Module):
         # Self-Attention：Query = Key = Value = src + pos
         query_with_pos = features + pos_embed
         
+        # encoder部分自注意力机制，通过grid_sample进行特征采样
         attended_features = self.self_attn(
             query_with_pos, 
             reference_points=reference_points, 
@@ -366,12 +406,14 @@ class DeformableTransformerDecoderLayer(nn.Module):
     Deformable Transformer Decoder 的一层
     
     结构：
-    1. Self-Attention：Object Queries 之间的自注意力
-    2. Cross-Attention（可变形注意力）：Query 关注 Encoder 输出
-    3. FFN：前馈网络
+    1. Self-Attention: Object Queries 之间的自注意力
+    2. Cross-Attention (可变形注意力): Query 关注 Encoder 输出
+    3. FFN: 前馈网络
     """
     def __init__(self, d_model=256, d_ffn=1024, dropout=0.1, n_levels=4, n_heads=8, n_points=4):
+        
         super().__init__()
+        
         # Self-Attention: 标准 MHSA (因为 Object Queries 数量少，不需要 sparse)
         self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.dropout1 = nn.Dropout(dropout)
@@ -409,10 +451,11 @@ class DeformableTransformerDecoderLayer(nn.Module):
             level_start_index: (n_levels,) level 起始索引
         """
         
-        # 1. Self Attention
+        # 1. Self Attention，这个多头注意力机制
         # Object Queries 之间的自注意力（让它们互相"交流"）
         # query_pos_embed 是可学习的位置编码
         q_with_pos = k_with_pos = object_queries + query_pos_embed
+        
         attended_queries = self.self_attn(
                     query=q_with_pos,
                     key=k_with_pos,
@@ -421,10 +464,8 @@ class DeformableTransformerDecoderLayer(nn.Module):
          
         object_queries = self.norm1(object_queries + self.dropout1(attended_queries))
         
-        # 2. Cross Attention (Deformable)
-        # Query = 内容(tgt) + 位置(query_pos_embed)
-        # Reference Points = 动态预测的坐标
-        # Value = Encoder Output (src)
+        # 2. Cross Attention (Deformable); Query = 内容(tgt) + 位置(query_pos_embed)
+        # Reference Points = 动态预测的坐标; Value = Encoder Output (src)
         attended_memory = self.cross_attn(
             query=object_queries + query_pos_embed,
             reference_points=query_reference_points,
@@ -443,13 +484,13 @@ class DeformableTransformerDecoderLayer(nn.Module):
 
 class DeformableTransformerDecoder(nn.Module):
     """
-    Deformable Transformer Decoder（多层堆叠 + 迭代优化）
-    
-    核心创新：Iterative Refinement（迭代优化）
-    - 每一层 Decoder 都会预测边界框的偏移量
-    - 用这个偏移量更新参考点（reference points）
-    - 下一层基于更新后的参考点继续优化
-    - 这样逐步精炼，最终得到更准确的边界框
+        Deformable Transformer Decoder(多层堆叠 + 迭代优化)
+        
+        核心创新: Iterative Refinement(迭代优化)
+        - 每一层 Decoder 都会预测边界框的偏移量
+        - 用这个偏移量更新参考点(reference points)
+        - 下一层基于更新后的参考点继续优化
+        - 这样逐步精炼，最终得到更准确的边界框
     """
     def __init__(self, decoder_layer, num_layers):
         super().__init__()
@@ -718,7 +759,7 @@ class DeformableDETR(nn.Module):
         enc_ref_points = self.get_encoder_reference_points(spatial_shapes, device=x.device)
         enc_ref_points = enc_ref_points.unsqueeze(0).repeat(B, 1, 1)
         
-        # encoder 
+        # encoder 输出
         memory = self.encoder(
             features=src_flatten,
             pos_embed=pos_flatten,
