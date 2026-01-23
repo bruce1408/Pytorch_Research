@@ -1,8 +1,8 @@
+import cv2
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import cv2
 
 # ==========================================
 # 1. 网络定义 (Network Architecture)
@@ -32,13 +32,13 @@ class Deep3DBoxNet(nn.Module):
 
     def forward(self, x):
         x = F.relu(self.bn1(self.fc1(x)))
-        
         dims = self.dim_head(x)
         
         # 朝向输出
         orientation_conf = self.conf_head(x)
         orientation_offset = self.orient_head(x)
         orientation_offset = orientation_offset.view(-1, self.num_bins, 2)
+        
         # 对 offset 做 L2 归一化，保证 cos^2 + sin^2 = 1
         orientation_offset = F.normalize(orientation_offset, dim=2)
         
