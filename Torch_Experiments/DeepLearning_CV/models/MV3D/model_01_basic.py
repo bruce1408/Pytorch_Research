@@ -69,8 +69,10 @@ class MockBackbone(nn.Module):
         self.out_channels = out_channels
 
     def forward(self, x):
+        
         # 模拟 8× 下采样：特征图高宽各除以 8
         feat_h, feat_w = x.shape[2] // 8, x.shape[3] // 8
+        
         # 输出形状 [B, out_channels, H/8, W/8]，设备与输入一致
         return torch.randn(x.shape[0], self.out_channels, feat_h, feat_w).to(x.device)
 
@@ -130,7 +132,9 @@ class InputEncoder:
         论文公式 (1)：将 3D 点投影到前视图 (FV) 的像素坐标（柱面投影）。
         输入: points (N, 3)，每行为 (x, y, z)。
         """
+        
         x, y, z = points[:, 0], points[:, 1], points[:, 2]
+        
         # 水平距离，用于计算仰角
         dist = torch.sqrt(x**2 + y**2)
 
