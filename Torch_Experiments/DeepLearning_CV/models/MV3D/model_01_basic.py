@@ -90,7 +90,7 @@ class ProposalNetwork(nn.Module):
         # 因此相对原始 BEV 输入：8× 下采样再 2× 上采样 → 4× 下采样
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
-        # 每个位置 anchor 数量 = 尺寸数 × 朝向数
+        # 每个位置 anchor 数量 = 尺寸数 × 朝向数 = 2 * 2 = 4
         num_anchors = len(config.anchor_sizes) * len(config.anchor_rotations)
 
         # 分类头：每个 anchor 二分类（目标 / 背景），输出通道数 = num_anchors * 2
@@ -245,7 +245,7 @@ class MV3D(nn.Module):
         super().__init__()
         self.cfg = MV3DConfig()
 
-        # 三个视图的 Backbone（此处为 Mock，论文为 VGG-16，通道减半 512→256）
+        # 三个视图的 Backbone（此处为 Mock，论文为 VGG-16，通道减半 512→256）bev-channel=6, fv-channels=3
         self.backbone_bev = MockBackbone(self.cfg.bev_channels, 256)
         self.backbone_fv  = MockBackbone(self.cfg.fv_channels, 256)
         self.backbone_rgb = MockBackbone(3, 256)
@@ -259,9 +259,9 @@ class MV3D(nn.Module):
     def forward(self, input_bev, input_fv, input_rgb):
         """
         完整前向。
-        input_bev:  [B, 6, 704, 800]
-        input_fv:   [B, 3, 64, 512]
-        input_rgb:  [B, 3, 500, 1280]
+        input_bev:  [B, 6, 704, 800]    BEV网格704*800 多高度切片+密度强度6通道
+        input_fv:   [B, 3, 64, 512]     FV网格64*512 高度、距离、强度3通道
+        input_rgb:  [B, 3, 500, 1280]   彩色图像500*1280 3通道
         返回: cls_scores [N, 2], bbox_pred [N, 24]
         """
         # Step 1: 三视图特征提取（约为输入的 1/8 空间尺寸）
