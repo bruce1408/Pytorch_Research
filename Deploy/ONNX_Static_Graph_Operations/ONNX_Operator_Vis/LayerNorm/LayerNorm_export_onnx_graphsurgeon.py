@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from common.config import get_onnx_operator_output_path
+
 import os
 import torch
 import onnx
@@ -35,7 +44,7 @@ def export_onnx_graph(onnx_path):
     torch.onnx.export(
             model         = model,
             args          = (input,),
-            f             = file,
+            f             = onnx_path,
             input_names   = ["input0"],
             output_names  = ["output0"],
             opset_version = 17)
@@ -98,9 +107,13 @@ def change_onnx_graph(onnx_path, export_path):
 if __name__ == "__main__":
     # print(os.path.abspath(os.path.dirname(__file__)))
     now = datetime.datetime.now()
-    dir_path_name = os.path.abspath(os.path.dirname(__file__))
-    file = os.path.join(dir_path_name, f"layernorm_{now.strftime('%Y%m%d_%H%M%S')}.onnx")
-    export_path = os.path.join(dir_path_name, f"layernorm_{now.strftime('%Y%m%d_%H%M%S')}_fuse.onnx")
-    # export_onnx_graph(file)
-    
-    change_onnx_graph("/mnt/share_disk/cdd/Pytorch_learning/ONNX_Operator_Vis/LayerNorm/layernorm_20240202_185911.onnx", export_path)
+    file = get_onnx_operator_output_path(
+        f"layernorm_{now.strftime('%Y%m%d_%H%M%S')}.onnx",
+        "onnx_operators",
+    )
+    export_path = get_onnx_operator_output_path(
+        f"layernorm_{now.strftime('%Y%m%d_%H%M%S')}_fuse.onnx",
+        "onnx_operators",
+    )
+    export_onnx_graph(file)
+    change_onnx_graph(file, export_path)

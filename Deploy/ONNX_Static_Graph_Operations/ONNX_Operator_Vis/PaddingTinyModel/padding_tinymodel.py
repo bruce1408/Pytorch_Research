@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from common.config import get_onnx_operator_output_path
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -724,7 +733,7 @@ if __name__ == "__main__":
     output = net(timesteps_input)
     
     # 导出模型到ONNX格式
-    onnx_path = "/Users/bruce/PycharmProjects/Pytorch_learning/ONNX_Operator_Vis/ONNX_Operators/padding_tinymodel.onnx"
+    onnx_path = get_onnx_operator_output_path("padding_tinymodel.onnx", "onnx_operators")
     torch.onnx.export(net, timesteps_input, onnx_path, verbose=True, opset_version=11)
 
     print("ONNX模型已导出到:", onnx_path)

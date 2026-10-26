@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from common.config import get_onnx_operator_output_dir
+
 import os
 import torch
 import torch.onnx as onnx
@@ -25,7 +34,7 @@ input_tensor = torch.randn(1, 192, 36)
 if __name__=="__main__":
     # 导出模型为ONNX格式
     operator_name = "squeeze"
-    model_dir = "/root/bruce_cui/onnx_operator_vis/onnx_operators"
+    model_dir = get_onnx_operator_output_dir("onnx_operators")
     onnx_file_path = "squeeze_dim0.onnx"
     onnx.export(model, input_tensor, os.path.join(model_dir, onnx_file_path), opset_version=11, verbose=True)
 

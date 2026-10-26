@@ -1,7 +1,15 @@
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from common.config import get_onnx_operator_output_path
+
 import torch.onnx
 import torch
 import torch.nn as nn
-import common.config as config_operator
 
 # 创建一个包含ConvTranspose2d操作的PyTorch模型
 class ConvTranspose2dModel(nn.Module):
@@ -26,7 +34,7 @@ for name, module in model.named_modules():
 input_data = torch.randn(20)  # 输入形状为(1, 1, 5, 5)
 
 # 导出模型到ONNX格式
-onnx_path = f"{config_operator}/output_onnx/PRelu.onnx"
+onnx_path = get_onnx_operator_output_path("PRelu.onnx", "onnx_operators")
 torch.onnx.export(model, input_data, onnx_path, verbose=True, opset_version=11)
 
 print("ONNX模型已导出到:", onnx_path)

@@ -1,5 +1,13 @@
-import os
 import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from common.config import get_onnx_operator_output_path
+
+import os
 import onnx
 import torch
 import torch.nn as nn
@@ -113,7 +121,7 @@ if __name__ == '__main__':
     input_data = torch.randn(1, 3, 224, 224)  
 
     # 导出模型到ONNX格式
-    onnx_path = "/Users/bruce/PycharmProjects/Pytorch_learning/ONNX_Operator_Vis/ONNX_Operators/tiny_model_conv3_s1_maxpool2_batch.onnx"
+    onnx_path = get_onnx_operator_output_path("tiny_model_conv3_s1_maxpool2_batch.onnx", "onnx_operators")
     torch.onnx.export(model, input_data, onnx_path, verbose=False, opset_version=11)
     
     # 使用onnxsim去消掉unsqueeze

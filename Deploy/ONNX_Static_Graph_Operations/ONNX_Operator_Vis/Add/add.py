@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from common.config import get_onnx_operator_output_path
+
 import torch.onnx
 import torch
 import torch.nn as nn
@@ -23,7 +32,7 @@ input_data = torch.randn(1, 3, 128, 128)  # 输入形状为(1, 1, 5, 5)
 input_data2 = torch.randn(1, 3, 128, 128)  # 输入形状为(1, 1, 5, 5)
 
 # 导出模型到ONNX格式
-onnx_path = "/root/bruce_cui/onnx_operator_vis/ONNX_Operators/add.onnx"
+onnx_path = get_onnx_operator_output_path("add.onnx", "onnx_operators")
 torch.onnx.export(model, (input_data, input_data2), onnx_path, verbose=True, opset_version=11)
 
 print("ONNX模型已导出到:", onnx_path)

@@ -65,3 +65,9 @@ cifar-10-batches-py/
 events.*
 *.pdf
 MNIST/*
+
+
+# GitNexus local index and caches
+/.gitnexus/
+*.data
+/.claude/

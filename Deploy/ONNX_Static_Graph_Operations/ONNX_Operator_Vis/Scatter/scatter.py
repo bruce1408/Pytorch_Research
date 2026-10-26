@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from common.config import get_onnx_operator_output_path
+
 import torch.onnx
 import torch
 import torch.nn as nn
@@ -30,5 +39,5 @@ class ConvTranspose2dModel(nn.Module):
 model = ConvTranspose2dModel()
 
 # 导出模型到ONNX格式
-onnx_path = "/root/bruce_cui/onnx_operator_vis/ONNX_Operators/scatter.onnx"
+onnx_path = get_onnx_operator_output_path("scatter.onnx", "onnx_operators")
 torch.onnx.export(model, data, onnx_path, verbose=True, opset_version=11)
